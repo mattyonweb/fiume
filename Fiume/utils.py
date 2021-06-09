@@ -1,7 +1,8 @@
 import random
 from typing import *
 from textwrap import wrap #split string in chunks
-
+import enum
+    
 def bool_to_bitmap(bs: List[bool]):
     bitmap = bytearray()
 
@@ -16,23 +17,39 @@ def bool_to_bitmap(bs: List[bool]):
 def to_int(b: bytes):
     return int.from_bytes(b, byteorder="big", signed=False) 
 def to_bytes(n: int, length=1):
-    return int.to_bytes(mexType.value, length=length, byteorder="big")
-
-from itertools import zip_longest
-
-def grouper(iterable, n, fillvalue=None):
-    "Collect data into fixed-length chunks or blocks "
-    # grouper('ABCDEFG', 3, 'x') --> ABC DEF Gxx"
-    args = [iter(iterable)] * n
-    return zip_longest(*args, fillvalue=fillvalue)
+    return int.to_bytes(n, length=length, byteorder="big")
 
 
-def generate_random_data(total_length=2048, block_size=256):
-    bs = bytes(random.randint(65, 90) for _ in range(total_length))
-    return grouper(bs, block_size, bytes(1))
+def generate_random_data(total_length=2048, block_size=256) -> List[bytes]:
+    bs = "".join([chr(random.randint(65, 90)) for _ in range(total_length)])
+
+    out=list()
+    for i in range(0, len(bs), block_size):
+        out.append(bytes(bs[i:i+block_size], "ascii"))
+    return out
+
+def mask_data(data: List[bytes], seed: int, padding=b"") -> List[bytes]:
+    random.seed(seed)
+    
+    data_out = list()
+    for block in data:
+        if random.random() < 0.5:
+            data_out.append(padding)
+        else:
+            data_out.append(block)
+    return data_out
 
 def data_to_bitmap(data: List[bytes]) -> List[bool]:
     bitmap = list()
     for block in data:
-        bitmap.append(block is not None)
+        bitmap.append(block not in [None, [], b""])
     return bitmap
+
+def bitmap_to_bool(bs: bytes):
+    bool_bitmap = list()
+    
+    for block in range(0, len(bs), 8):
+        for i in range(8):
+            bool_bitmap.append(((bs[block] >> (7-i)) & 1) == 1)
+    return bool_bitmap
+

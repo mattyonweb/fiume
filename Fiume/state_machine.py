@@ -8,7 +8,11 @@ import queue
 import os
 import random
 from typing import *
-import utils
+
+try:
+    import Fiume.utils as utils
+except:
+    import utils as utils
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -39,12 +43,12 @@ BLOCK_SIZE = 256
 
 DATA = utils.generate_random_data(total_length=2048, block_size=BLOCK_SIZE)
 
-class PeerManager(socketserver.StreamRequestHandler):
-    def __init__(self, peer, data: List[bytes], initiator: Initiator):
+class PeerManager:
+    def __init__(self, socket, data: List[bytes], initiator: Initiator):
         self.logger = logging.getLogger("PeerManager")
         self.logger.debug("__init__")
         
-        self.peer = peer
+        self.socket = socket
         self.my_bitmap, self.peer_bitmap = utils.data_to_bitmap(data), list()
 
         self.peer_chocking, self.am_choking = True, True
@@ -52,19 +56,24 @@ class PeerManager(socketserver.StreamRequestHandler):
 
         self.initiator = initiator
 
+        # breakpoint()
+        
         self.queue_to_elaborate = queue.Queue()
         self.queue_to_send_out  = queue.Queue()
 
         self.data = data
+
         
-    def handle(self):
-        self.logger.debug("handle")
+    def main(self):
+        self.logger.debug("main")
         
         if self.initiator == Initiator.SELF:
             self.send_handshake()
         else:
             self.receive_handshake()
 
+        self.queue_to_send_out.put(self.make_message(MexType.BITFIELD))
+        
         t1 = threading.Thread(target=self.message_receiver)
         t2 = threading.Thread(target=self.message_sender)
         t1.start()
@@ -72,18 +81,41 @@ class PeerManager(socketserver.StreamRequestHandler):
         t1.join()
         t2.join()
 
+        
     def send_handshake(self):
         pass
 
     def receive_handshake(self):
         pass
 
+    # Thread a sé stante
+    def message_receiver(self):
+        while True:
+            raw_length = self.socket.recv(4)
+            print("RAWLENGTH", raw_length)
+            length = int.from_bytes(raw_length, byteorder="big", signed=False)
+            raw_mex = self.socket.recv(length)
+
+            self.message_interpreter(raw_length + raw_mex)
+
+            
+    # Thread a sé stante
+    def message_sender(self):
+        while True:
+            mex = self.queue_to_send_out.get()
+            self.socket.sendall(mex)
+
+    #######
+
     def message_interpreter(self, mex: bytes):
         """ Elabora un messaggio ricevuto, decidendo come rispondere e/o
         che cosa fare. """
         
-        mex_type = MexType(mex[5])
-            
+        mex_type = MexType(mex[4])
+
+        # self.logger.debug("Received message", str(mex_type))
+        self.logger.debug("Received message" + str(mex_type))
+        
         if mex_type == MexType.CHOKE:
             self.peer_chocking = True
         elif mex_type == MexType.UNCHOKE:
@@ -93,20 +125,20 @@ class PeerManager(socketserver.StreamRequestHandler):
         elif mex_type == MexType.NOT_INTERESTED:
             self.peer_interested = False
         elif mex_type == MexType.HAVE:
-            self.interpret_received_have(mex[6:])
+            self.interpret_received_have(mex[5:])
 
         elif mex_type == MexType.BITFIELD:
-            self.interpret_received_bitfield(mex[6:])
+            self.interpret_received_bitfield(mex[5:])
 
         elif mex_type == MexType.REQUEST:
-            piece_index  = utils.to_int(mex[6:10]) 
-            piece_offset = utils.to_int(mex[10:14]) 
-            piece_length = utils.to_int(mex[14:18]) 
+            piece_index  = utils.to_int(mex[5:9]) 
+            piece_offset = utils.to_int(mex[9:13]) 
+            piece_length = utils.to_int(mex[13:17]) 
             self.manage_request(piece_index, piece_offset, piece_length)
 
         elif mex_type == MexType.PIECE:
-            piece_index  = utils.to_int(mex[6:10]) 
-            piece_offset = utils.to_int(mex[10:14])
+            piece_index  = utils.to_int(mex[5:9]) 
+            piece_offset = utils.to_int(mex[9:13])
             piece_payload = mex[15:]
             self.manage_received_piece(piece_index, piece_offset, piece_payload)
 
@@ -120,24 +152,7 @@ class PeerManager(socketserver.StreamRequestHandler):
             print("ricevuto messaggio sconosciuto")
             breakpoint()
 
-
-    # Thread a sé stante
-    def message_receiver(self):
-        while True:
-            mex = self.rfile.readline().strip() #TODO: strip qui va bene?
-
-            print(mex)
             
-            self.message_interpreter(mex)
-    
-    # Thread a sé stante
-    def message_sender(self):
-        while True:
-            mex = self.queue_to_send_out.get()
-            self.wfile.write(mex + "\n") #TODO. Serve l'a capo?
-
-    #######
-    
     def send_message(self, mex: bytes):
         self.queue_to_send_out.put(mex)
 
@@ -181,7 +196,15 @@ class PeerManager(socketserver.StreamRequestHandler):
                     
                     
     def interpret_received_bitfield(self, mex_payload: bytes):
-        pass
+        self.peer_bitmap = utils.bitmap_to_bool(mex_payload)
+
+        for i, (my, other) in enumerate(zip(self.my_bitmap, self.peer_bitmap)):
+            print(f"Block {i}: ", end="")
+            if my and other: print("both")
+            elif my and not other: print("only me")
+            elif not my and other: print("only peer")
+            else: print("no-one")
+            
 
     def interpret_received_have(self, mex_payload: bytes):
         pass
@@ -198,40 +221,55 @@ class PeerManager(socketserver.StreamRequestHandler):
         if self.my_bitmap[p_index]:
             pass
 
-    
-class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    pass
+#################################ÀÀ
 
-#####################################ÀÀ
-    
+# Questo oggetto gestisce le connessioni entrambi.
+# Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
+# il quale si occuperà di gestire lo scambio di messaggi
+class ThreadedServer(object):
+    def __init__(self, port):
+        self.host = "localhost"
+        self.port = port
 
-class MyTCPHandler(socketserver.StreamRequestHandler):
-    def handle(self):
-        # self.rfile is a file-like object created by the handler;
-        # we can now use e.g. readline() instead of raw recv() calls
-
-        print("INIZIO HANDLE")
-        time.sleep(10)
+        print("Binding della socket a", (self.host, self.port))
         
-        self.data = self.rfile.readline().strip()
-        
-        print("{} wrote:".format(self.client_address[0]))
-        print(self.data)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((self.host, self.port))
 
-        # Likewise, self.wfile is a file-like object used to write back
-        # to the client
-        self.wfile.write(self.data.upper())
+    def listen(self):
+        self.sock.listen(5) # Numero massimo di connessioni in attesa (?)
 
-
-# if __name__ == "__main__":
-#     HOST, PORT = "localhost", 1111
-
-#     # Create the server, binding to localhost on port 9999
-#     socketserver.TCPServer.allow_reuse_address = True
-    
-#     with socketserver.TCPServer((HOST, PORT), MyTCPHandler) as server:
-#         # Activate the server; this will keep running until you
-#         # interrupt the program with Ctrl-C
-#         server.serve_forever()
+        print("Avvio console")        
+        threading.Thread(target=self.console).start()
 
         
+        while True:
+            client, address = self.sock.accept()
+            print("RICEVUTA CONNESSIONE DA", address)
+            newPeer = PeerManager(client, utils.mask_data(DATA, self.port), Initiator.OTHER)
+            threading.Thread(target = newPeer.main).start()
+
+    def console(self):
+        print("Console avviata")
+
+        while True:
+            tokens = input(f"{self.host}:{self.port} >>> ").strip().split(" ")
+
+            print(tokens)
+
+            if tokens[0] == "con":
+                port = int(tokens[1])
+
+                # with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+                new_socket.connect(("localhost", port))
+
+                newPeer = PeerManager(new_socket, utils.mask_data(DATA, self.port), Initiator.SELF) 
+                threading.Thread(target = newPeer.main).start()
+                
+                break
+
+port_num = int(input("Port number: "))
+ThreadedServer(port_num).listen()
+
