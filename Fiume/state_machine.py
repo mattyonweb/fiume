@@ -16,7 +16,7 @@ except:
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(name)s: %(message)s',
+    format='[%(levelname)s] %(message)s',
 )
 
 class MexType(enum.Enum):
@@ -54,6 +54,7 @@ class PeerManager:
 
         # Bitmaps of my/other pieces
         self.my_bitmap: List[bool]   = utils.data_to_bitmap(data)
+        print(self.my_bitmap)
         self.peer_bitmap: List[bool] = list()
 
         # Ok
@@ -74,7 +75,8 @@ class PeerManager:
         self.am_interested_in: List[int] = list()
         self.peer_interested_in: List[int] = list()
         
-        self.progresses: Dict[int, Tuple[int, int]] = dict()
+        self.my_progresses: Dict[int, Tuple[int, int]] = dict()
+        self.peer_progresses: Dict[int, Tuple[int, int]] = dict()
 
         
     def main(self):
@@ -155,7 +157,8 @@ class PeerManager:
         elif mex_type == MexType.NOT_INTERESTED:
             self.peer_interested = False
         elif mex_type == MexType.HAVE:
-            self.interpret_received_have(mex[5:])
+            # self.manage_received_have(mex[5:])
+            self.manage_received_have(utils.to_int(mex[5:9]))
 
         elif mex_type == MexType.BITFIELD:
             self.interpret_received_bitfield(mex[5:])
@@ -169,7 +172,7 @@ class PeerManager:
         elif mex_type == MexType.PIECE:
             piece_index  = utils.to_int(mex[5:9]) 
             piece_offset = utils.to_int(mex[9:13])
-            piece_payload = mex[15:]
+            piece_payload = mex[13:]
             self.manage_received_piece(piece_index, piece_offset, piece_payload)
 
         elif mex_type == MexType.CANCEL:
@@ -220,6 +223,8 @@ class PeerManager:
 
             return (utils.to_bytes(9 + len(payload), length=4) + 
                     utils.to_bytes(mexType.value) +
+                    utils.to_bytes(kwargs["piece_index"], length=4) +
+                    utils.to_bytes(kwargs["piece_offset"], length=4) +
                     payload)
 
         raise Exception("Messaggio impossibile da costruire")
@@ -274,14 +279,14 @@ class PeerManager:
             self.logger.debug("Wanted to ask a new piece, but am choked")
             return
 
-        not_yet_started = set(self.am_interested_in) - set(self.progresses.keys())
+        not_yet_started = set(self.am_interested_in) - set(self.my_progresses.keys())
         if len(not_yet_started) == 0:
             self.logger.debug("No NEW pieces are richideibili")
             return
         
         random_piece = random.choice(list(not_yet_started)) #non si può fare random choice su set()
         
-        self.logger.debug("I'm going to ask for piece number %d", random_piece)
+        self.logger.debug("Asking for new piece, number %d", random_piece)
         
         self.send_message(
             MexType.REQUEST,
@@ -290,7 +295,7 @@ class PeerManager:
             piece_length=BLOCK_SIZE  #TODO: in produzione, sarà 2**14
         )
 
-        self.progresses[random_piece] = (0, BLOCK_SIZE) #TODO: in produzione, sarà 2**14 (?)
+        self.my_progresses[random_piece] = (0, BLOCK_SIZE) #TODO: in produzione, sarà 2**14 (?)
 
     def try_ask_for_piece(self, suggestion=None):
         """ Differisce da ask_for_new_piece: mentre l'altro chiede un pezzo
@@ -300,11 +305,11 @@ class PeerManager:
             self.logger.debug("Wanted to request a piece, but am choked")
             return
         
-        if not self.progresses: # se non ci sono pezzi incompleti
+        if len(self.my_progresses) == 0: # se non ci sono pezzi incompleti
             return self.ask_for_new_piece()
 
-        piece_idx = random.choice(self.progresses.keys())
-        (offset_start, total_len) = self.progresses[piece_idx]
+        piece_idx = random.choice(self.my_progresses.keys())
+        (offset_start, total_len) = self.my_progresses[piece_idx]
         self.logger.debug("Will resume piece %d from offset %d", piece_idx, offset_start)
         
         self.send_message(
@@ -315,22 +320,111 @@ class PeerManager:
                              random.randint(1, 2*(total_len - offset_start))) # TODO
         )
 
-    def interpret_received_have(self, mex_payload: bytes):
-        pass
+    def manage_received_have(self, piece_index: int):
+        self.logger.debug("Acknowledging that peer has new piece %d", piece_index)
+        self.peer_bitmap[piece_index] = True
 
+        
     def manage_received_piece(self, piece_index, piece_offset, piece_payload):
-        pass
-    
+        # Se è il primo frammento del pezzo XX che ricevo, crea una bytestring
+        # fatta di soli caratteri NULL
+        if self.my_bitmap[piece_index]:
+            self.logger.warning("Received fragment of piece %d, but I have piece %d already",
+                                piece_index, piece_index)
+            breakpoint()
+            return
+        
+        if self.data[piece_index] == b"":
+            self.data[piece_index] = bytes(BLOCK_SIZE) #TODO dipendenza sbagliata da blocksize
+
+        # Inserisco payload nella giusta posizione, all'interno della bytestring
+        s = self.data[piece_index]
+        s = s[:piece_offset] + piece_payload + s[piece_offset+len(piece_payload):]
+
+        if not (len(s) == len(self.data[piece_index])):
+            breakpoint()
+            raise Exception("Lunghezze non coincidono")
+                
+
+        self.data[piece_index] = s
+        
+        self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s",
+                          piece_index, piece_offset, len(piece_payload),
+                          piece_payload[piece_offset:piece_offset+4],
+                          piece_payload[piece_offset+len(piece_payload)-4:piece_offset+len(piece_payload)])
+
+        # Aggiorna my_progersses
+        old_partial, old_total = self.my_progresses[piece_index]
+        if old_partial + len(piece_payload) == old_total:
+            self.logger.debug("Completed download of piece %d", piece_index)
+            
+            del self.my_progresses[piece_index]
+            self.verify_hash(piece_index)
+
+            self.logger.debug("Setting my bitfield for piece %d as PRESENT", piece_index)
+            self.my_bitmap[piece_index] = True
+            
+            self.logger.debug("Sending HAVE for piece %d", piece_index)
+            self.send_message(MexType.HAVE, piece_index=piece_index)
+
+            return
+                              
+        self.my_progresses[piece_index] = (old_partial + len(piece_payload), old_total)
+        
+        
     def manage_request(self, p_index, p_offset, p_length):
         """ Responds to a REQUEST message from the peer. """
         if self.am_choking:
-            self.logger.debug("Received REQUEST but am choking.")
+            self.logger.warning("Received REQUEST but am choking.")
+            return
+
+        self.logger.debug("Received REQUEST for piece %d offset %d length %d: will send %s...%s",
+                          p_index, p_offset, p_length,
+                          # TODO: bug se p_length < 4
+                          self.data[p_index][p_offset:p_offset+4],
+                          self.data[p_index][p_offset+p_length-4:p_offset+p_length])
+        
+        # self.logger.debug("Received REQUEST for piece %d starting from %d", p_index, p_offset)
+
+        if not self.peer_interested:
+            self.logger.warning("Was asked for piece %d, but to me peer is not interested", p_index)
+            breakpoint()
             return
         
-        self.logger.debug("Received REQUEST for piece %d starting from %d", p_index, p_offset)    
-        if self.my_bitmap[p_index]:
-            pass
+        if self.peer_chocking:
+            self.logger.warning("Was asked for piece %d, but peer is chocking me", p_index)
+            # breakpoint()
+            # return
 
+        if not self.my_bitmap[p_index]:
+            self.logger.warning("Was asked for piece %d, but I don't have it", p_index)
+            breakpoint()
+            return
+
+        self.send_message(
+            MexType.PIECE,
+            piece_index=p_index,
+            piece_offset=p_offset,
+            piece_length=p_length
+        )
+
+        # TODO: revisione di queste due righe
+        if p_index in self.peer_progresses:
+            (old_partial, old_total) = self.peer_progresses[p_index]
+        else:
+            (old_partial, old_total) = (0, BLOCK_SIZE)
+            
+        if old_partial + p_length < BLOCK_SIZE:
+            self.peer_progresses[p_index] = (old_partial + p_length, old_total)
+        else:
+            if p_index in self.peer_progresses:
+                del self.peer_progresses[p_index]
+            else:
+                self.peer_progresses[p_index] = (old_partial + p_length, old_total)
+        
+    def verify_hash(self, piece_index):
+        return True
+            
 #################################ÀÀ
 
 # Questo oggetto gestisce le connessioni entrambi.
@@ -379,6 +473,7 @@ class ThreadedServer:
                 self.connect_as_client(port)
                 break
 
-port_num = int(input("Port number: "))
+import sys
+port_num = int(sys.argv[1]) if len(sys.argv)>1 else int(input("Port number: "))
 ThreadedServer(port_num).listen()
 
