@@ -61,7 +61,7 @@ class PeerManager:
         self.peer_interested, self.am_interested = False, False
 
         # Needed for establishing who starts the handshake
-        self.initiator = initiator
+        self.initiator: Initiator = initiator
 
         # Queues for inter-thread communication
         self.queue_to_elaborate = queue.Queue()
@@ -74,7 +74,7 @@ class PeerManager:
         self.am_interested_in: List[int] = list()
         self.peer_interested_in: List[int] = list()
         
-        self.progresses = dict()
+        self.progresses: Dict[int, Tuple[int, int]] = dict()
 
         
     def main(self):
@@ -226,16 +226,19 @@ class PeerManager:
                     
                     
     def interpret_received_bitfield(self, mex_payload: bytes):
+        """ Analyzes a received bitmap """
         self.peer_bitmap = utils.bitmap_to_bool(mex_payload)
 
+        # Stampo a video grafichino dei pezzi 
         print("my:   ", end="")
-        for my in self.my_bitmap: #, self.peer_bitmap):
+        for my in self.my_bitmap:
             print("x" if my else " ", end="")
         print("\npeer: ", end="")
         for peer in self.peer_bitmap:
             print("x" if peer else " ", end="")
         print()
 
+        
         # Idenitifico (if any) i pieces del mio peer che io non ho
         for i, (m,p) in enumerate(zip(self.my_bitmap, self.peer_bitmap)):
             if not m and p:
@@ -243,7 +246,8 @@ class PeerManager:
 
                 
         # Se, dal confronto fra la mia e l'altrui bitmap, scopro
-        # che non mi interessa nulla di ciò che ha il peer, 
+        # che non mi interessa nulla di ciò che ha il peer, informalo che
+        # sei NOT_INTERESTED
         if len(self.am_interested_in) == 0:
             self.logger.debug("Nothing to be interested in")
             self.am_interested = False
@@ -260,6 +264,8 @@ class PeerManager:
             return
             
     def ask_for_new_piece(self):
+        """ Richiedo un pezzo completamente nuovo, cioè non già in self.progresses """
+        
         if len(self.am_interested_in) == 0:
             self.logger.debug("Nothing to be interested in")
             return
