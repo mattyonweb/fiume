@@ -16,10 +16,12 @@ except:
 
 logging.basicConfig(
     level=logging.DEBUG,
-    format='[%(levelname)s] %(message)s',
+    format='[%(levelname)s] %(name)s %(asctime)s %(message)s',
+    datefmt="%I:%M:%S"
 )
 
 class MexType(enum.Enum):
+    HANDSHAKE = 84 # non cambiare
     KEEP_ALIVE = -1 #?
     CHOKE = 0
     UNCHOKE = 1
@@ -45,17 +47,20 @@ DATA = utils.generate_random_data(total_length=2048, block_size=BLOCK_SIZE)
 
 
 class PeerManager:
-    def __init__(self, socket, data: List[bytes], initiator: Initiator):
-        self.logger = logging.getLogger("PeerManager")
-        self.logger.debug("__init__")
-
+    def __init__(self, socket, data: List[bytes], info_hash, initiator: Initiator, delayed=True):
         # Peer socket
         self.socket = socket
-
+        self.peer_ip, self.peer_port = self.socket.getsockname()
+        
+        self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
+        self.logger.debug("__init__")
+        self.delayed = delayed # aggiunge una sleep a sendmessage()
+        
         # Bitmaps of my/other pieces
         self.my_bitmap: List[bool]   = utils.data_to_bitmap(data)
-        print(self.my_bitmap)
         self.peer_bitmap: List[bool] = list()
+
+        self.info_hash = info_hash #bytes(20)
 
         # Ok
         self.peer_chocking, self.am_choking = True, True
@@ -63,6 +68,7 @@ class PeerManager:
 
         # Needed for establishing who starts the handshake
         self.initiator: Initiator = initiator
+        self.received_handshake, self.sent_handshake = False, False
 
         # Queues for inter-thread communication
         self.queue_to_elaborate = queue.Queue()
@@ -84,27 +90,44 @@ class PeerManager:
         
         if self.initiator == Initiator.SELF:
             self.send_handshake()
-        else:
-            self.receive_handshake()
 
-        self.queue_to_send_out.put(self.make_message(MexType.BITFIELD))
-        
         t1 = threading.Thread(target=self.message_receiver)
         t2 = threading.Thread(target=self.message_sender)
         t1.start()
         t2.start()
+        
         t1.join()
         t2.join()
 
         
     def send_handshake(self):
-        pass
+        self.logger.debug("Sending HANDSHAKE")
+        self.send_message(MexType.HANDSHAKE)
+        self.sent_handshake = True
+        if self.received_handshake:
+            self.logger.debug("Sending BITFIELD")
+            self.send_message(MexType.BITFIELD)
 
-    def receive_handshake(self):
-        pass
+    def receive_handshake(self, mex):
+        self.convalidate_handshake(mex)
+        self.received_handshake = True
+        self.logger.debug("Received HANDSHAKE")
+        
+        if self.sent_handshake:
+            self.logger.debug("Sending BITFIELD")
+            self.send_message(MexType.BITFIELD)
+        else:
+            self.send_handshake()
 
+    def convalidate_handshake(self, mex:bytes):
+        return True # TODO
+
+    
     # Thread a sé stante
     def message_receiver(self):
+        handshake_mex = self.socket.recv(68)
+        self.message_interpreter(handshake_mex)
+        
         while True:
             raw_length = self.socket.recv(4)
             length = int.from_bytes(raw_length, byteorder="big", signed=False)
@@ -117,6 +140,8 @@ class PeerManager:
     def message_sender(self):
         while True:
             mex = self.queue_to_send_out.get()
+            if self.delayed:
+                time.sleep(random.random() + 0.5)
             self.socket.sendall(mex)
 
 
@@ -140,13 +165,16 @@ class PeerManager:
     def message_interpreter(self, mex: bytes):
         """ Elabora un messaggio ricevuto, decidendo come rispondere e/o
         che cosa fare. """
+
         
         mex_type = MexType(mex[4])
 
-        # self.logger.debug("Received message", str(mex_type))
         self.logger.debug("Received message %s", str(mex_type))
-        
-        if mex_type == MexType.CHOKE:
+
+        if mex_type == MexType.HANDSHAKE:
+            self.receive_handshake(mex)
+            
+        elif mex_type == MexType.CHOKE:
             self.peer_chocking = True
         elif mex_type == MexType.UNCHOKE:
             self.peer_chocking = False
@@ -156,8 +184,10 @@ class PeerManager:
             self.try_unchoke_peer()
         elif mex_type == MexType.NOT_INTERESTED:
             self.peer_interested = False
+            if not self.am_choking:
+                self.send_message(MexType.CHOKE)
+                
         elif mex_type == MexType.HAVE:
-            # self.manage_received_have(mex[5:])
             self.manage_received_have(utils.to_int(mex[5:9]))
 
         elif mex_type == MexType.BITFIELD:
@@ -192,6 +222,13 @@ class PeerManager:
     def make_message(self, mexType: MexType, **kwargs) -> bytes:
         if mexType == MexType.KEEP_ALIVE:
             return bytes([0,0,0,0])
+
+        if mexType == MexType.HANDSHAKE:
+            return (utils.to_bytes(19) +
+                    b"BitTorrent protocol" +
+                    bytes(8) +
+                    self.info_hash +
+                    utils.generate_peer_id(seed=self.peer_port))
         
         if mexType.value in [0,1,2,3]:
             return (bytes([0,0,0,1]) +
@@ -235,10 +272,10 @@ class PeerManager:
         self.peer_bitmap = utils.bitmap_to_bool(mex_payload)
 
         # Stampo a video grafichino dei pezzi 
-        print("my:   ", end="")
+        print("my:   |", end="")
         for my in self.my_bitmap:
             print("x" if my else " ", end="")
-        print("\npeer: ", end="")
+        print("\npeer: |", end="")
         for peer in self.peer_bitmap:
             print("x" if peer else " ", end="")
         print()
@@ -255,8 +292,9 @@ class PeerManager:
         # sei NOT_INTERESTED
         if len(self.am_interested_in) == 0:
             self.logger.debug("Nothing to be interested in")
-            self.am_interested = False
-            self.send_message(MexType.NOT_INTERESTED)
+            if self.am_interested:
+                self.am_interested = False
+                self.send_message(MexType.NOT_INTERESTED)
             return
         
         elif (self.am_interested): # Se già mi interessava qualcosa, non fare nulla
@@ -273,6 +311,9 @@ class PeerManager:
         
         if len(self.am_interested_in) == 0:
             self.logger.debug("Nothing to be interested in")
+            if self.am_interested:
+                self.am_interested = False
+                self.send_message(MexType.NOT_INTERESTED)
             return
         
         if self.peer_chocking:
@@ -292,7 +333,8 @@ class PeerManager:
             MexType.REQUEST,
             piece_index=random_piece,
             piece_offset=0,
-            piece_length=BLOCK_SIZE  #TODO: in produzione, sarà 2**14
+            piece_length=min(BLOCK_SIZE,
+                             random.randint(1, 2*BLOCK_SIZE)) #TODO: in produzione, sarà 2**14
         )
 
         self.my_progresses[random_piece] = (0, BLOCK_SIZE) #TODO: in produzione, sarà 2**14 (?)
@@ -308,7 +350,11 @@ class PeerManager:
         if len(self.my_progresses) == 0: # se non ci sono pezzi incompleti
             return self.ask_for_new_piece()
 
-        piece_idx = random.choice(self.my_progresses.keys())
+        if suggestion is not None:
+            piece_idx = suggestion
+        else:
+            piece_idx = random.choice(self.my_progresses.keys())
+
         (offset_start, total_len) = self.my_progresses[piece_idx]
         self.logger.debug("Will resume piece %d from offset %d", piece_idx, offset_start)
         
@@ -363,14 +409,16 @@ class PeerManager:
 
             self.logger.debug("Setting my bitfield for piece %d as PRESENT", piece_index)
             self.my_bitmap[piece_index] = True
+            self.am_interested_in.remove(piece_index)
             
             self.logger.debug("Sending HAVE for piece %d", piece_index)
             self.send_message(MexType.HAVE, piece_index=piece_index)
 
+            self.try_ask_for_piece()
             return
                               
         self.my_progresses[piece_index] = (old_partial + len(piece_payload), old_total)
-        
+        self.try_ask_for_piece(suggestion=piece_index)
         
     def manage_request(self, p_index, p_offset, p_length):
         """ Responds to a REQUEST message from the peer. """
@@ -392,7 +440,7 @@ class PeerManager:
             return
         
         if self.peer_chocking:
-            self.logger.warning("Was asked for piece %d, but peer is chocking me", p_index)
+            self.logger.debug("Was asked for piece %d, but peer is chocking me", p_index)
             # breakpoint()
             # return
 
@@ -450,19 +498,22 @@ class ThreadedServer:
         while True:
             client, address = self.sock.accept()
             print("RICEVUTA CONNESSIONE DA", address)
-            newPeer = PeerManager(client, utils.mask_data(DATA, self.port), Initiator.OTHER)
+            newPeer = PeerManager(client, utils.mask_data(DATA, self.port), bytes(20), Initiator.OTHER)
             threading.Thread(target = newPeer.main).start()
 
     def connect_as_client(self, port):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
         new_socket.connect(("localhost", port))
 
-        newPeer = PeerManager(new_socket, utils.mask_data(DATA, self.port), Initiator.SELF) 
-        threading.Thread(target = newPeer.main).start()
-                
+        newPeer = PeerManager(new_socket, utils.mask_data(DATA, self.port), bytes(20), Initiator.SELF) 
+        t = threading.Thread(target = newPeer.main)
+        t.start()
+        return newPeer
+    
     def console(self):
         print("Console avviata")
-
+        threads = list()
+        
         while True:
             tokens = input(f"{self.host}:{self.port} >>> ").strip().split(" ")
 
@@ -470,8 +521,15 @@ class ThreadedServer:
 
             if tokens[0] == "con":
                 port = int(tokens[1])
-                self.connect_as_client(port)
-                break
+                t = self.connect_as_client(port)
+                threads.append(t)
+
+            elif tokens[0] == "deb":
+                breakpoint()
+
+            elif tokens[0] == "q":
+                sys.exit(0)
+
 
 import sys
 port_num = int(sys.argv[1]) if len(sys.argv)>1 else int(input("Port number: "))
