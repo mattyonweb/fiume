@@ -131,7 +131,7 @@ class PeerManager:
         # contrindicazioni nell'unchokare il peer. Per ora assumo si possa
         # sempre fare.
         self.am_choking = False
-        self.send_message(self.make_message(MexType.UNCHOKE))
+        self.send_message(MexType.UNCHOKE)
     
     #######
 
@@ -183,8 +183,8 @@ class PeerManager:
             breakpoint()
 
             
-    def send_message(self, mex: bytes):
-        self.queue_to_send_out.put(mex)
+    def send_message(self, mexType: MexType, **kwargs):
+        self.queue_to_send_out.put(self.make_message(mexType, **kwargs))
 
     def make_message(self, mexType: MexType, **kwargs) -> bytes:
         if mexType == MexType.KEEP_ALIVE:
@@ -247,7 +247,7 @@ class PeerManager:
         if len(self.am_interested_in) == 0:
             self.logger.debug("Nothing to be interested in")
             self.am_interested = False
-            self.send_message(self.make_message(MexType.NOT_INTERESTED))
+            self.send_message(MexType.NOT_INTERESTED)
             return
         
         elif (self.am_interested): # Se già mi interessava qualcosa, non fare nulla
@@ -255,7 +255,7 @@ class PeerManager:
 
         else: # Altrimenti dichiara il tuo interesse
             self.am_interested = True
-            self.send_message(self.make_message(MexType.INTERESTED))
+            self.send_message(MexType.INTERESTED)
             self.ask_for_new_piece()
             return
             
@@ -278,12 +278,10 @@ class PeerManager:
         self.logger.debug("I'm going to ask for piece number %d", random_piece)
         
         self.send_message(
-            self.make_message(
-                MexType.REQUEST,
-                piece_index=random_piece,
-                piece_offset=0,
-                piece_length=BLOCK_SIZE  #TODO: in produzione, sarà 2**14
-            )
+            MexType.REQUEST,
+            piece_index=random_piece,
+            piece_offset=0,
+            piece_length=BLOCK_SIZE  #TODO: in produzione, sarà 2**14
         )
 
         self.progresses[random_piece] = (0, BLOCK_SIZE) #TODO: in produzione, sarà 2**14 (?)
@@ -303,13 +301,13 @@ class PeerManager:
         (offset_start, total_len) = self.progresses[piece_idx]
         self.logger.debug("Will resume piece %d from offset %d", piece_idx, offset_start)
         
-        self.send_message(self.make_message(
+        self.send_message(
             MexType.REQUEST, 
             piece_index=piece_idx,
             piece_offset=offset_start,
             piece_length=min(total_len - offset_start,
                              random.randint(1, 2*(total_len - offset_start))) # TODO
-        ))
+        )
 
     def interpret_received_have(self, mex_payload: bytes):
         pass
@@ -348,7 +346,6 @@ class ThreadedServer:
 
         print("Avvio console")        
         threading.Thread(target=self.console).start()
-
         
         while True:
             client, address = self.sock.accept()
