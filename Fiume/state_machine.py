@@ -69,7 +69,6 @@ class PeerManager:
 
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
-        self.info_hash = info_hash #bytes(20)
 
         # Ok
         self.peer_chocking, self.am_choking = True, True
@@ -84,7 +83,6 @@ class PeerManager:
         self.queue_to_send_out  = queue.Queue()
 
         # Blocks that i posses
-        self.data: List[bytes] = data
         self.file: BufferedReader = file
         
         # Blocks that I don't have but my peer has
@@ -115,23 +113,15 @@ class PeerManager:
         if piece_length == 0:
             piece_length = self.metainfo.piece_size
 
-        if self.data:
-            return self.data[piece_index][piece_offset:piece_offset+piece_length]
-
-        f.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
-        data = f.read(piece_length)
-        f.seek(0,0)
+        self.file.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
+        data = self.file.read(piece_length)
+        self.file.seek(0,0)
         return data
 
     def write_data(self, piece_index, piece_offset, payload):
-        if self.data:
-            s = self.data[piece_idx]
-            self.data[piece_idx] = s[:piece_offset] + payload + s[piece_offset+len(piece_payload):]
-            return
-
-        f.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
-        f.write(payload)
-        return
+        self.file.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
+        self.file.write(payload)
+        self.file.seek(0,0)
     
     def send_handshake(self):
         self.logger.debug("Sending HANDSHAKE")
@@ -152,6 +142,7 @@ class PeerManager:
         else:
             self.send_handshake()
 
+            
     def convalidate_handshake(self, mex:bytes):
         return True # TODO
 
@@ -418,22 +409,8 @@ class PeerManager:
             breakpoint()
             return
 
-        # Non più usato self.data
-        # if self.data[piece_index] == b"":
-        #     self.data[piece_index] = bytes(BLOCK_SIZE) #TODO dipendenza sbagliata da blocksize
+        self.write_data(piece_index, piece_offset, piece_payload)        
 
-        # Inserisco payload nella giusta posizione, all'interno della bytestring
-        # s = self.data[piece_index]
-        # s = s[:piece_offset] + piece_payload + s[piece_offset+len(piece_payload):]
-        self.write_data(piece_index, piece_offset, piece_payload)
-        
-        # if not (len(s) == len(self.data[piece_index])):
-        #     breakpoint()
-        #     raise Exception("Lunghezze non coincidono")
-                
-
-        # self.data[piece_index] = s
-        
         self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s",
                           piece_index, piece_offset, len(piece_payload),
                           piece_payload[piece_offset:piece_offset+4],
@@ -445,7 +422,9 @@ class PeerManager:
             self.logger.debug("Completed download of piece %d", piece_index)
             
             del self.my_progresses[piece_index]
-            self.verify_hash(piece_index)
+
+            if not self.verify_hash(piece_index):
+                raise Exception("Hashes not matching") #TODO
 
             self.logger.debug("Setting my bitfield for piece %d as PRESENT", piece_index)
             self.my_bitmap[piece_index] = True
@@ -468,9 +447,9 @@ class PeerManager:
 
         self.logger.debug("Received REQUEST for piece %d offset %d length %d: will send %s...%s",
                           p_index, p_offset, p_length,
-                          # TODO: bug se p_length < 4
-                          self.data[p_index][p_offset:p_offset+4],
-                          self.data[p_index][p_offset+p_length-4:p_offset+p_length])
+                          # TODO: bug se p_length < 4 (IRL non succederà mai)
+                          self.read_data(p_index, p_offset, 4),
+                          self.read_data(p_index, p_offset, 4))
         
         # self.logger.debug("Received REQUEST for piece %d starting from %d", p_index, p_offset)
 
@@ -511,7 +490,21 @@ class PeerManager:
                 self.peer_progresses[p_index] = (old_partial + p_length, old_total)
         
     def verify_hash(self, piece_index):
-        return True
+        import hashlib
+
+        sha = hashlib.sha1()
+        sha.update(self.read_data(piece_index))
+        calculated_hash = sha.digest()
+
+        are_equal = calculated_hash == self.metainfo.pieces_hash[piece_index]
+
+        if are_equal:
+            self.logger.debug("Calculated hash for piece %d matches with metainfo", piece_index)
+        else:
+            self.logger.warning("Hashes for piece %d DO NOT MATCH!", piece_index)
+            breakpoint()
+
+        return are_equal
             
 #################################ÀÀ
 
