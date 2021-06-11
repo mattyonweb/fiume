@@ -47,8 +47,12 @@ DATA = utils.generate_random_data(total_length=2048, block_size=BLOCK_SIZE)
 
 
 class PeerManager:
-    def __init__(self, socket, data: List[bytes], info_hash, initiator: Initiator,
-                 delayed=True, timeout=None):
+    def __init__(self, socket,
+                 metainfo, tracker_manager,
+                 file: BufferedReader,
+                 initiator: Initiator,
+                 delayed=True, timeout=None,
+                 data:List[bytes] = None):
         
         # Peer socket
         self.socket = socket
@@ -60,9 +64,11 @@ class PeerManager:
         self.timeout = timeout
             
         # Bitmaps of my/other pieces
-        self.my_bitmap: List[bool]   = utils.data_to_bitmap(data)
+        self.my_bitmap:   List[bool] = utils.data_to_bitmap(data)
         self.peer_bitmap: List[bool] = list()
 
+        self.metainfo = metainfo
+        self.tracker_manager = tracker_manager
         self.info_hash = info_hash #bytes(20)
 
         # Ok
@@ -79,7 +85,8 @@ class PeerManager:
 
         # Blocks that i posses
         self.data: List[bytes] = data
-
+        self.file: BufferedReader = file
+        
         # Blocks that I don't have but my peer has
         self.am_interested_in: List[int] = list()
         self.peer_interested_in: List[int] = list()
@@ -103,7 +110,29 @@ class PeerManager:
         t1.join(self.timeout)
         t2.join(self.timeout)
 
-        
+
+    def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
+        if piece_length == 0:
+            piece_length = self.metainfo.piece_size
+
+        if self.data:
+            return self.data[piece_index][piece_offset:piece_offset+piece_length]
+
+        f.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
+        data = f.read(piece_length)
+        f.seek(0,0)
+        return data
+
+    def write_data(self, piece_index, piece_offset, payload):
+        if self.data:
+            s = self.data[piece_idx]
+            self.data[piece_idx] = s[:piece_offset] + payload + s[piece_offset+len(piece_payload):]
+            return
+
+        f.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
+        f.write(payload)
+        return
+    
     def send_handshake(self):
         self.logger.debug("Sending HANDSHAKE")
         self.send_message(MexType.HANDSHAKE)
@@ -231,7 +260,7 @@ class PeerManager:
             return (utils.to_bytes(19) +
                     b"BitTorrent protocol" +
                     bytes(8) +
-                    self.info_hash +
+                    self.metainfo.info_hash +
                     utils.generate_peer_id(seed=self.peer_port))
         
         if mexType.value in [0,1,2,3]:
@@ -259,9 +288,14 @@ class PeerManager:
                     utils.to_bytes(kwargs["piece_length"], length=4))
 
         if mexType == MexType.PIECE:
-            block = self.data[kwargs["piece_index"]]
-            payload = block[kwargs["piece_offset"]:kwargs["piece_offset"]+kwargs["piece_length"]]
-
+            # block = self.data[kwargs["piece_index"]]
+            # payload = block[kwargs["piece_offset"]:kwargs["piece_offset"]+kwargs["piece_length"]]
+            payload = self.read_data(
+                kwargs["piece_index"],
+                kwargs["piece_offset"],
+                kwargs["piece_length"]
+            )
+            
             return (utils.to_bytes(9 + len(payload), length=4) + 
                     utils.to_bytes(mexType.value) +
                     utils.to_bytes(kwargs["piece_index"], length=4) +
@@ -383,20 +417,22 @@ class PeerManager:
                                 piece_index, piece_index)
             breakpoint()
             return
-        
-        if self.data[piece_index] == b"":
-            self.data[piece_index] = bytes(BLOCK_SIZE) #TODO dipendenza sbagliata da blocksize
+
+        # Non più usato self.data
+        # if self.data[piece_index] == b"":
+        #     self.data[piece_index] = bytes(BLOCK_SIZE) #TODO dipendenza sbagliata da blocksize
 
         # Inserisco payload nella giusta posizione, all'interno della bytestring
-        s = self.data[piece_index]
-        s = s[:piece_offset] + piece_payload + s[piece_offset+len(piece_payload):]
-
-        if not (len(s) == len(self.data[piece_index])):
-            breakpoint()
-            raise Exception("Lunghezze non coincidono")
+        # s = self.data[piece_index]
+        # s = s[:piece_offset] + piece_payload + s[piece_offset+len(piece_payload):]
+        self.write_data(piece_index, piece_offset, piece_payload)
+        
+        # if not (len(s) == len(self.data[piece_index])):
+        #     breakpoint()
+        #     raise Exception("Lunghezze non coincidono")
                 
 
-        self.data[piece_index] = s
+        # self.data[piece_index] = s
         
         self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s",
                           piece_index, piece_offset, len(piece_payload),
@@ -568,9 +604,10 @@ class ThreadedServer:
 
 
 import sys
+import Fiume.metainfo_decoder as md
 
 if __name__ == "__main__":
     self_port_num = int(sys.argv[1]) if len(sys.argv) > 1 else 0
-    
+
     t = ThreadedServer(self_port_num, thread_timeout=3, thread_delay=0.5)
     t.listen()

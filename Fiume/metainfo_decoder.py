@@ -20,15 +20,19 @@ Classe che contiene le informazioni del file .torrent
         sha.update(bencodepy.encode(self[b"info"]))
         self.info_hash = sha.digest()
 
-        self.trackers  = self.__get_trackers()
+        self.trackers  = self.__gather_trackers()
+        self.piece_size = self[b"info"][b"piece length"]
+        self.block_size = 16384 #16kb, standard
         
-    def __get_trackers(self):
+    def __gather_trackers(self):
+        """ Unites all possible trackers in a single list, useless """
         trackers = [self[b"announce"]]
         
         if b"announce-list" in self:
             trackers += [l[0] for l in self[b"announce-list"]]
 
         return trackers
+
     
 ###################
 
