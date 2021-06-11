@@ -90,7 +90,8 @@ class PeerManager:
         
     def main(self):
         self.logger.debug("main")
-            
+
+        # Stabilisce chi fra i due peers dovrà inviare il primo messaggio
         if self.initiator == Initiator.SELF:
             self.send_handshake()
 
@@ -563,43 +564,13 @@ class ThreadedServer:
                 breakpoint()
 
             elif tokens[0].strip() == "q":
-                sys.exit(0)
+               break
 
 
 import sys
-import signal
-# port_num = int(sys.argv[1]) if len(sys.argv)>1 else int(input("Port number: "))
-# t = ThreadedServer(port_num, thread_timeout=5)
-# t.listen()
 
-
-# t1 = ThreadedServer(2979, thread_timeout=3)
-# tt1 = threading.Thread(target=t1.listen, args=(False,))
-# tt1.start()
-# tt1.join(0.5)
-
-# t2 = ThreadedServer(9452, thread_timeout=3)
-# tt2 = threading.Thread(target=t2.connect_as_client, args=(2979,))
-# tt2.start()
-# tt2.join(0.5)
-
-# import multiprocessing
-
-# t1 = ThreadedServer(2980, thread_timeout=3)
-# tt1 = multiprocessing.Process(target=t1.listen, args=(False,))
-# tt1.start()
-# print("eseguito t1")
-
-# t2 = ThreadedServer(9452, thread_timeout=3)
-# tt2 = multiprocessing.Process(target=t2.connect_as_client, args=(2980,))
-# tt2.start()
-# print("eseguito t2")
-
-# time.sleep(2)
-
-# tt1.terminate()
-# print("terminato t1")
-# tt2.terminate()
-# print("terminato t2")
-
-# t1.peer.data
+if __name__ == "__main__":
+    self_port_num = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+    
+    t = ThreadedServer(self_port_num, thread_timeout=3, thread_delay=0.5)
+    t.listen()
