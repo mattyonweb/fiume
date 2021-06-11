@@ -26,6 +26,12 @@ def to_bytes(n: int, length=1):
 
 HANDSHAKE_PREAMBLE = to_bytes(19) + b"BitTorrent protocol"
 
+def split_in_chunks(l, length):
+    out=list()
+    for i in range(0, len(l), length):
+        out.append(l[i:i+length])
+    return out
+
 def generate_random_data(total_length=2048, block_size=256) -> List[bytes]:
     bs = "".join([chr(random.randint(65, 90)) for _ in range(total_length)])
 
