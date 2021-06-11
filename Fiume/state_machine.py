@@ -47,7 +47,9 @@ DATA = utils.generate_random_data(total_length=2048, block_size=BLOCK_SIZE)
 
 
 class PeerManager:
-    def __init__(self, socket, data: List[bytes], info_hash, initiator: Initiator, delayed=True):
+    def __init__(self, socket, data: List[bytes], info_hash, initiator: Initiator,
+                 delayed=True, timeout=None):
+        
         # Peer socket
         self.socket = socket
         self.peer_ip, self.peer_port = self.socket.getsockname()
@@ -55,7 +57,8 @@ class PeerManager:
         self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
         self.logger.debug("__init__")
         self.delayed = delayed # aggiunge una sleep a sendmessage()
-        
+        self.timeout = timeout
+            
         # Bitmaps of my/other pieces
         self.my_bitmap: List[bool]   = utils.data_to_bitmap(data)
         self.peer_bitmap: List[bool] = list()
@@ -87,7 +90,7 @@ class PeerManager:
         
     def main(self):
         self.logger.debug("main")
-        
+            
         if self.initiator == Initiator.SELF:
             self.send_handshake()
 
@@ -95,9 +98,9 @@ class PeerManager:
         t2 = threading.Thread(target=self.message_sender)
         t1.start()
         t2.start()
-        
-        t1.join()
-        t2.join()
+            
+        t1.join(self.timeout)
+        t2.join(self.timeout)
 
         
     def send_handshake(self):
@@ -141,7 +144,7 @@ class PeerManager:
         while True:
             mex = self.queue_to_send_out.get()
             if self.delayed:
-                time.sleep(random.random() + 0.5)
+                time.sleep((random.random() / 12) + self.delayed)
             self.socket.sendall(mex)
 
 
@@ -479,37 +482,69 @@ class PeerManager:
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
 class ThreadedServer:
-    def __init__(self, port):
+    def __init__(self, port, thread_timeout=None, thread_delay=0):
         self.host = "localhost"
-        self.port = port
-
-        print("Binding della socket a", (self.host, self.port))
+        self.timeout = thread_timeout
+        self.peer = None
+        self.delay = thread_delay
+        
+        print("Binding della socket a", (self.host, port))
         
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((self.host, self.port))
+        self.sock.bind((self.host, port))
 
-    def listen(self):
+        self.port = self.sock.getsockname()[1]
+                
+    def listen(self, console=True):
         self.sock.listen(5) # Numero massimo di connessioni in attesa (?)
 
-        print("Avvio console")        
-        threading.Thread(target=self.console).start()
+        if console:
+            print("Avvio console")        
+            console_thread = threading.Thread(target=self.console)
+            console_thread.start()
         
         while True:
             client, address = self.sock.accept()
-            print("RICEVUTA CONNESSIONE DA", address)
-            newPeer = PeerManager(client, utils.mask_data(DATA, self.port), bytes(20), Initiator.OTHER)
-            threading.Thread(target = newPeer.main).start()
+            
+            newPeer = PeerManager(
+                client,
+                utils.mask_data(DATA, self.port),
+                bytes(20),
+                Initiator.OTHER,
+                delayed=self.delay,
+                timeout=self.timeout
+            )
 
+            self.peer = newPeer
+            
+            t = threading.Thread(target = newPeer.main)
+            t.start()
+            t.join(1)
+            return newPeer
+
+            
     def connect_as_client(self, port):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
         new_socket.connect(("localhost", port))
 
-        newPeer = PeerManager(new_socket, utils.mask_data(DATA, self.port), bytes(20), Initiator.SELF) 
+        newPeer = PeerManager(
+            new_socket,
+            utils.mask_data(DATA, self.port),
+            bytes(20), #infohash
+            Initiator.SELF,
+            delayed=self.delay,
+            timeout=self.timeout
+        ) 
+
+        self.peer = newPeer
+        
         t = threading.Thread(target = newPeer.main)
         t.start()
+        t.join(2)
         return newPeer
-    
+
+        
     def console(self):
         print("Console avviata")
         threads = list()
@@ -527,11 +562,44 @@ class ThreadedServer:
             elif tokens[0] == "deb":
                 breakpoint()
 
-            elif tokens[0] == "q":
+            elif tokens[0].strip() == "q":
                 sys.exit(0)
 
 
 import sys
-port_num = int(sys.argv[1]) if len(sys.argv)>1 else int(input("Port number: "))
-ThreadedServer(port_num).listen()
+import signal
+# port_num = int(sys.argv[1]) if len(sys.argv)>1 else int(input("Port number: "))
+# t = ThreadedServer(port_num, thread_timeout=5)
+# t.listen()
 
+
+# t1 = ThreadedServer(2979, thread_timeout=3)
+# tt1 = threading.Thread(target=t1.listen, args=(False,))
+# tt1.start()
+# tt1.join(0.5)
+
+# t2 = ThreadedServer(9452, thread_timeout=3)
+# tt2 = threading.Thread(target=t2.connect_as_client, args=(2979,))
+# tt2.start()
+# tt2.join(0.5)
+
+# import multiprocessing
+
+# t1 = ThreadedServer(2980, thread_timeout=3)
+# tt1 = multiprocessing.Process(target=t1.listen, args=(False,))
+# tt1.start()
+# print("eseguito t1")
+
+# t2 = ThreadedServer(9452, thread_timeout=3)
+# tt2 = multiprocessing.Process(target=t2.connect_as_client, args=(2980,))
+# tt2.start()
+# print("eseguito t2")
+
+# time.sleep(2)
+
+# tt1.terminate()
+# print("terminato t1")
+# tt2.terminate()
+# print("terminato t2")
+
+# t1.peer.data
