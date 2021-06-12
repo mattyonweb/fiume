@@ -7,6 +7,8 @@ import enum
 import queue
 import os
 import random
+
+from typing.io import *
 from typing import *
 
 try:
@@ -49,10 +51,9 @@ DATA = utils.generate_random_data(total_length=2048, block_size=BLOCK_SIZE)
 class PeerManager:
     def __init__(self, socket,
                  metainfo, tracker_manager,
-                 file: BufferedReader,
+                 file: BinaryIO,
                  initiator: Initiator,
-                 delayed=True, timeout=None,
-                 data:List[bytes] = None):
+                 delayed=True, timeout=None):
         
         # Peer socket
         self.socket = socket
@@ -64,7 +65,7 @@ class PeerManager:
         self.timeout = timeout
             
         # Bitmaps of my/other pieces
-        self.my_bitmap:   List[bool] = utils.data_to_bitmap(data)
+        self.my_bitmap:   List[bool] = utils.data_to_bitmap(file)
         self.peer_bitmap: List[bool] = list()
 
         self.metainfo = metainfo
@@ -83,7 +84,7 @@ class PeerManager:
         self.queue_to_send_out  = queue.Queue()
 
         # Blocks that i posses
-        self.file: BufferedReader = file
+        self.file: BinaryIO = self.initialize_file(file)
         
         # Blocks that I don't have but my peer has
         self.am_interested_in: List[int] = list()
@@ -122,7 +123,8 @@ class PeerManager:
         self.file.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
         self.file.write(payload)
         self.file.seek(0,0)
-    
+
+        
     def send_handshake(self):
         self.logger.debug("Sending HANDSHAKE")
         self.send_message(MexType.HANDSHAKE)
@@ -141,11 +143,15 @@ class PeerManager:
             self.send_message(MexType.BITFIELD)
         else:
             self.send_handshake()
-
             
     def convalidate_handshake(self, mex:bytes):
-        return True # TODO
+        assert mex[28:48] == self.metainfo.info_hash
 
+
+    def initialize_file(self, file: BinaryIO):
+        if utils.determine_size_of(file) != self.metainfo[b"info"][b"length"]:
+            file.seek(0, 0)
+            file.write(bytes(self.metainfo[b"info"][b"length"]))
     
     # Thread a sé stante
     def message_receiver(self):
@@ -512,11 +518,16 @@ class PeerManager:
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
 class ThreadedServer:
-    def __init__(self, port, thread_timeout=None, thread_delay=0):
+    def __init__(self, port, metainfo, tracker_manager,
+                 thread_timeout=None, thread_delay=0, **options):
         self.host = "localhost"
         self.timeout = thread_timeout
         self.peer = None
         self.delay = thread_delay
+        self.options = options
+
+        self.metainfo = metainfo
+        self.tracker_manager = tracker_manager
         
         print("Binding della socket a", (self.host, port))
         
@@ -526,21 +537,17 @@ class ThreadedServer:
 
         self.port = self.sock.getsockname()[1]
                 
-    def listen(self, console=True):
+    def listen(self):
         self.sock.listen(5) # Numero massimo di connessioni in attesa (?)
 
-        if console:
-            print("Avvio console")        
-            console_thread = threading.Thread(target=self.console)
-            console_thread.start()
-        
         while True:
             client, address = self.sock.accept()
             
             newPeer = PeerManager(
                 client,
-                utils.mask_data(DATA, self.port),
-                bytes(20),
+                self.metainfo,
+                self.tracker_manager,
+                open(self.options["output_file"], "rb+"),
                 Initiator.OTHER,
                 delayed=self.delay,
                 timeout=self.timeout
@@ -551,21 +558,26 @@ class ThreadedServer:
             t = threading.Thread(target = newPeer.main)
             t.start()
             t.join(1)
-            return newPeer
+            # return newPeer
 
             
-    def connect_as_client(self, port):
+    def connect_as_client(self, ip, port):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
-        new_socket.connect(("localhost", port))
+        new_socket.connect((ip, port))
 
+        if not os.path.exists(self.options["output_file"]):
+            with open(self.options["output_file"], "wb") as f:
+                f.write(bytes(1))
+                
         newPeer = PeerManager(
             new_socket,
-            utils.mask_data(DATA, self.port),
-            bytes(20), #infohash
-            Initiator.SELF,
+            self.metainfo,
+            self.tracker_manager,
+            open(self.options["output_file"], "rb+"),
+            Initiator.OTHER,
             delayed=self.delay,
             timeout=self.timeout
-        ) 
+        )
 
         self.peer = newPeer
         
@@ -574,33 +586,43 @@ class ThreadedServer:
         t.join(2)
         return newPeer
 
-        
-    def console(self):
-        print("Console avviata")
-        threads = list()
-        
-        while True:
-            tokens = input(f"{self.host}:{self.port} >>> ").strip().split(" ")
-
-            print(tokens)
-
-            if tokens[0] == "con":
-                port = int(tokens[1])
-                t = self.connect_as_client(port)
-                threads.append(t)
-
-            elif tokens[0] == "deb":
-                breakpoint()
-
-            elif tokens[0].strip() == "q":
-               break
-
 
 import sys
-import Fiume.metainfo_decoder as md
+try:
+    import Fiume.metainfo_decoder as md
+except:
+    import metainfo_decoder as md
+import bencodepy
 
-if __name__ == "__main__":
-    self_port_num = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+options = {
+    "torrent_path": "/home/groucho/Luca rantolo.mp3.torrent",
+    "output_file": "/home/groucho/torrent/luca/downloaded.mp3",
+}
 
-    t = ThreadedServer(self_port_num, thread_timeout=3, thread_delay=0.5)
-    t.listen()
+with open(options["torrent_path"], "rb") as f:
+    metainfo = md.MetaInfo(bencodepy.decode(f.read()))
+            
+# if __name__ == "__main__":
+self_port_num = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+
+try:
+    with open(options["torrent_path"], "rb") as f:
+        metainfo = md.MetaInfo(bencodepy.decode(f.read()))
+
+    tm = md.TrackerManager(metainfo)
+
+    t = ThreadedServer(
+        self_port_num,
+        metainfo, tm,
+        thread_timeout=3, thread_delay=0.5,
+        **options
+    )
+
+    peer = tm.peers[0]
+    print(peer)
+    t.connect_as_client(*peer)
+
+except Exception as e:
+    print(e)
+    breakpoint()
+    raise e

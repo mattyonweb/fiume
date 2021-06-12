@@ -1,7 +1,8 @@
 import random
 from typing import *
-from textwrap import wrap #split string in chunks
+from typing.io import *
 import enum
+import os
 
 try:
     import Fiume.config as config
@@ -51,7 +52,7 @@ def mask_data(data: List[bytes], seed: int, padding=b"") -> List[bytes]:
             data_out.append(block)
     return data_out
 
-def data_to_bitmap(data: List[bytes]) -> List[bool]:
+def data_to_bitmap(file: BinaryIO, block_size) -> List[bool]:
     bitmap = list()
     for block in data:
         bitmap.append(block not in [None, [], b""])
@@ -70,3 +71,10 @@ def generate_peer_id(seed=None) -> bytes:
         random.seed(seed)
 
     return config.CLIENT_INFO + bytes([random.randint(65, 90) for _ in range(12)])
+
+def determine_size_of(f: BinaryIO):
+    old_file_position = f.tell()
+    f.seek(0, os.SEEK_END)
+    size = f.tell()
+    f.seek(old_file_position, os.SEEK_SET)
+    return size
