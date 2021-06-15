@@ -6,13 +6,18 @@ A toy BitTorrent client written in python, based on the official [specs](https:/
 
 ## What it can do
 
-- Download of single-file torrents from peers!
+- Download of single-file torrents from peer!
 - Save download state beetwen sessions, and start again at a later time
+
+## What it can SOMEWHAT do
+
+- Reach acceptable speed downloads (I may have a very low bar)
 
 ## What it can NOT do
 
 - Download of multiple-file torrents
-- Reach high speed downloads
 - Support DHT, Message Stream Encryption or any other extension 
 - Manage more than one download at a time (although you could spawn more than one Fiume process to do that)
+- Download from more than one peer concurrently
+- It can download, but I'm not so sure about uploading (correctly)
 

@@ -52,8 +52,7 @@ class PeerManager:
     def __init__(self, socket,
                  metainfo, tracker_manager,
                  out_fpath: pathlib.Path,
-                 initiator: Initiator,
-                 delayed=True, timeout=None):
+                 initiator: Initiator):
         
         # Peer socket
         self.socket = socket
@@ -61,9 +60,7 @@ class PeerManager:
         
         self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
         self.logger.debug("__init__")
-        self.delayed = delayed # aggiunge una sleep a sendmessage()
-        self.timeout = timeout
-
+        
         
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
@@ -96,6 +93,8 @@ class PeerManager:
         
         self.my_progresses: Dict[int, Tuple[int, int]] = dict()
         self.peer_progresses: Dict[int, Tuple[int, int]] = dict()
+
+        self.max_concurrent_pieces = 4
         
         self.old_messages = list()
         self.completed = False
@@ -113,8 +112,8 @@ class PeerManager:
         t1.start()
         t2.start()
             
-        t1.join(self.timeout)
-        t2.join(self.timeout)
+        t1.join(2)
+        t2.join(2)
 
 
     def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
@@ -203,8 +202,6 @@ class PeerManager:
     def message_sender(self):
         while True:
             mex = self.queue_to_send_out.get()
-            if self.delayed:
-                time.sleep((random.random() / 12) + self.delayed)
             self.socket.sendall(mex)
 
 
@@ -336,8 +333,6 @@ class PeerManager:
                     utils.to_bytes(kwargs["piece_length"], length=4))
 
         elif mexType == MexType.PIECE:
-            # block = self.data[kwargs["piece_index"]]
-            # payload = block[kwargs["piece_offset"]:kwargs["piece_offset"]+kwargs["piece_length"]]
             payload = self.read_data(
                 kwargs["piece_index"],
                 kwargs["piece_offset"],
@@ -398,7 +393,7 @@ class PeerManager:
             self.am_interested = True
             self.logger.debug("Sending INTERESTED message")
             self.send_message(MexType.INTERESTED)
-            self.ask_for_new_piece()
+            self.ask_for_new_pieces()
             return
 
     def get_piece_size(self, piece_index):
@@ -420,8 +415,35 @@ class PeerManager:
         else:
             return self.metainfo.piece_size
 
+
         
-    def ask_for_new_piece(self):
+    def ask_for_single_piece(self, piece_idx):
+        self.logger.debug("Asking for new piece, number %d", piece_idx)
+
+        piece_length = min(
+            self.metainfo.block_size,
+            self.get_piece_size(piece_idx)
+        )
+        
+        try:    
+            self.send_message(
+                MexType.REQUEST,
+                piece_index=piece_idx,
+                piece_offset=0,
+                # complicato, ma serve per gestire irregolarità ultimo piece: così
+                # non richiedi più bytes di quelli di cui è composto l'ultimo piece
+                piece_length=piece_length
+            )
+        except Exception as e:
+            breakpoint()
+            raise e
+        
+        # self.get_piece_size serve per gestire len irregolare dell'ultimo piece
+        self.my_progresses[piece_idx] = (0, self.get_piece_size(piece_idx))
+
+        
+        
+    def ask_for_new_pieces(self):
         """ Richiedo un pezzo completamente nuovo, cioè non già in self.progresses """
         
         if len(self.am_interested_in) == 0:
@@ -437,31 +459,25 @@ class PeerManager:
             return
 
         not_yet_started = set(self.am_interested_in) - set(self.my_progresses.keys())
-        if len(not_yet_started) == 0:
-            self.logger.debug("No NEW pieces are richideibili")
-            return
-        
-        random_piece = random.choice(list(not_yet_started)) #non si può fare random choice su set()
-        
-        self.logger.debug("Asking for new piece, number %d", random_piece)
 
-        piece_length = min(self.metainfo.block_size, self.get_piece_size(random_piece))
-        
-        try:    
-            self.send_message(
-                MexType.REQUEST,
-                piece_index=random_piece,
-                piece_offset=0,
-                # complicato, ma serve per gestire irregolarità ultimo piece: così
-                # non richiedi più bytes di quelli di cui è composto l'ultimo piece
-                piece_length=piece_length
-            )
-        except Exception as e:
-            breakpoint()
-            raise e
-        
-        # self.get_piece_size per gestire len irregolare dell'ultimo piece
-        self.my_progresses[random_piece] = (0, self.get_piece_size(random_piece)) 
+        # Se tutti i pieces sono già stati avviati o completati
+        if len(not_yet_started) == 0:
+            self.logger.debug("No NEW pieces are requestable; abort")
+            return
+
+        # Se sto già scaricando il numero max di pieces contemporaneamente
+        if len(self.my_progresses) >= self.max_concurrent_pieces:
+            self.logger.debug("Already downloading at the fullest")
+            return
+                
+        random_piece = random.choices(
+            list(not_yet_started), #non si può fare random choice su set()
+            k=min(self.max_concurrent_pieces - len(self.my_progresses),
+                  len(not_yet_started))
+        )
+
+        for piece in random_piece:
+            self.ask_for_single_piece(piece)
 
     
     def try_ask_for_piece(self, suggestion=None):
@@ -473,24 +489,27 @@ class PeerManager:
             return
         
         if len(self.my_progresses) == 0: # se non ci sono pezzi incompleti
-            return self.ask_for_new_piece()
+            return self.ask_for_new_pieces()
 
+        if len(self.my_progresses) >= self.max_concurrent_pieces:
+            self.logger.debug("Already topping max concurrent requests")
+            return
+        
         if suggestion is not None:
             piece_idx = suggestion
         else:
             piece_idx = random.choice(list(self.my_progresses.keys()))
 
         (offset_start, total_len) = self.my_progresses[piece_idx]
-        self.logger.debug("Will resume piece %d from offset %d", piece_idx, offset_start)
+        self.logger.debug("Will continue with piece %d from offset %d", piece_idx, offset_start)
         
         self.send_message(
             MexType.REQUEST, 
             piece_index=piece_idx,
             piece_offset=offset_start,
             piece_length=total_len - offset_start
-            # piece_length=min(total_len - offset_start,
-                             # random.randint(1, 2*(total_len - offset_start))) # TODO
         )
+        
 
     def manage_received_have(self, piece_index: int):
         self.logger.debug("Acknowledging that peer has new piece %d", piece_index)
@@ -501,14 +520,13 @@ class PeerManager:
         # Se è il primo frammento del pezzo XX che ricevo, crea una bytestring
         # fatta di soli caratteri NULL
         if self.my_bitmap[piece_index]:
-            self.logger.warning("Received fragment of piece %d, but I have piece %d already",
-                                piece_index, piece_index)
+            self.logger.warning("Received fragment of piece %d offset %d, but I have piece it already (len: %d)",
+                                piece_index, piece_offset, len(piece_payload))
             assert (
                 self.read_data(piece_index, piece_offset, len(piece_payload)) ==
                 piece_payload
             )
-            
-            # breakpoint()
+
             return
 
         num_written_bytes = self.write_data(piece_index, piece_offset, piece_payload)        
@@ -521,6 +539,7 @@ class PeerManager:
        
         # Aggiorna my_progersses
         old_partial, old_total = self.my_progresses[piece_index]
+        
         if old_partial + len(piece_payload) == old_total:
             self.logger.debug("Completed download of piece %d", piece_index)
             
@@ -536,11 +555,14 @@ class PeerManager:
             self.logger.debug("Sending HAVE for piece %d", piece_index)
             self.send_message(MexType.HAVE, piece_index=piece_index)
 
-            self.try_ask_for_piece()
+            # Finito un pezzo, iniziane uno NUOVO
+            self.ask_for_new_pieces()
             return
                               
         self.my_progresses[piece_index] = (old_partial + len(piece_payload), old_total)
         self.try_ask_for_piece(suggestion=piece_index)
+
+
         
     def manage_request(self, p_index, p_offset, p_length):
         """ Responds to a REQUEST message from the peer. """
@@ -630,9 +652,7 @@ class ThreadedServer:
     def __init__(self, port, metainfo, tracker_manager,
                  thread_timeout=None, thread_delay=0, **options):
         self.host = "localhost"
-        self.timeout = thread_timeout
         self.peer = None
-        self.delay = thread_delay
         self.options = options
 
         self.metainfo = metainfo
@@ -657,9 +677,7 @@ class ThreadedServer:
                 self.metainfo,
                 self.tracker_manager,
                 open(self.options["output_file"], "rb+"),
-                Initiator.OTHER,
-                delayed=self.delay,
-                timeout=self.timeout
+                Initiator.OTHER
             )
 
             self.peer = newPeer
@@ -679,9 +697,7 @@ class ThreadedServer:
             self.metainfo,
             self.tracker_manager,
             pathlib.Path(self.options["output_file"]),
-            Initiator.SELF,
-            delayed=self.delay,
-            timeout=self.timeout
+            Initiator.SELF
         )
 
         self.peer = newPeer
@@ -721,7 +737,6 @@ tm = md.TrackerManager(metainfo)
 t = ThreadedServer(
     self_port_num,
     metainfo, tm,
-    thread_timeout=3, thread_delay=0.5,
     **options
 )
 

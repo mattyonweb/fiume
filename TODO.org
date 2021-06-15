@@ -11,6 +11,8 @@
 ** Make multiple requests for different pieces at the same time
 
 * Not-so-urgent
-
+** Implement Fast Extension BEP 6
+https://www.bittorrent.org/beps/bep_0006.html
+** Download from more than one peer concurrently
 
 * Not-at-all-urgent
