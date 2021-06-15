@@ -208,6 +208,11 @@ class PeerManager:
             self.socket.sendall(mex)
 
 
+    def shutdown(self):
+        self.logger.debug("Shutdown after receiving empty message from peer")
+        exit(0)
+        # TODO
+        
     def try_unchoke_peer(self):
         if not self.am_choking:
             self.logger.debug("Asked if could unchoke peer, but it is already unchoked")
@@ -232,11 +237,14 @@ class PeerManager:
         self.old_messages.append(("other", mex))
 
         # TODO: messaggio vuoto b"" = fine scambio o errore di rete
-        
+        if mex == b"":
+            self.shutdown()
+            
         try:
             mex_type = MexType(mex[4])
-        except:
+        except Exception as e:
             breakpoint()
+            raise e
             
         self.logger.debug("Received message %s", str(mex_type))
 
@@ -694,8 +702,8 @@ import bencodepy
 options = {
     # "torrent_path": "/home/groucho/Luca rantolo.mp3.torrent",
     # "output_file": "/home/groucho/torrent/asd/downloaded.mp3",
-    "torrent_path": "/home/groucho/asd.png.torrent",
-    "output_file": "/home/groucho/torrent/asd/3310.png",
+    "torrent_path": "/home/groucho/torrent/image.jpg.torrent",
+    "output_file": "/home/groucho/torrent/asd/image.jpg",
 }
 
 with open(options["torrent_path"], "rb") as f:
@@ -720,11 +728,4 @@ t = ThreadedServer(
 peer = tm.peers[0]
 print(peer)
 pm = t.connect_as_client(*peer)
-
-# except Exception as e:
-#     import pdb
-#     print(e)
-#     # pdb.pm()
-#     breakpoint()
-#     raise e
 

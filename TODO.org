@@ -1,0 +1,16 @@
+#+TITLE: TODO  
+#+AUTHOR: Jacopo Bolbo
+#+EMAIL: cvd00@insicuri.net
+
+#+LATEX_CLASS: article
+#+LATEX_CLASS_OPTIONS: [a4paper]
+#+LATEX_HEADER: \input{$HOME/.emacs.d/latex-preamble.tex}
+
+* Urgent
+** Make an easy-to-use CLI
+** Make multiple requests for different pieces at the same time
+
+* Not-so-urgent
+
+
+* Not-at-all-urgent
