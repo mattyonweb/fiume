@@ -3,13 +3,15 @@ from typing import *
 from typing.io import *
 import enum
 import os
+from pathlib import Path
+import bitmap
 
 try:
     import Fiume.config as config
 except:
     import config as config
 
-def bool_to_bitmap(bs: List[bool]):
+def bool_to_bitmap(bs: List[bool]) -> bytearray:
     bitmap = bytearray()
 
     for byte_ in range(0, len(bs), 8):
@@ -18,7 +20,7 @@ def bool_to_bitmap(bs: List[bool]):
             single_byte += int(x) << (7-i)
         bitmap.append(single_byte)
 
-    return bitmap
+    return bytes(bitmap)
 
 def to_int(b: bytes):
     return int.from_bytes(b, byteorder="big", signed=False) 
@@ -52,19 +54,38 @@ def mask_data(data: List[bytes], seed: int, padding=b"") -> List[bytes]:
             data_out.append(block)
     return data_out
 
-def data_to_bitmap(file: BinaryIO, block_size) -> List[bool]:
-    bitmap = list()
-    for block in data:
-        bitmap.append(block not in [None, [], b""])
-    return bitmap
+def get_bitmap_file(download_fpath: Path) -> Path:
+    return config.BITMAPS_DIR / download_fpath.name
 
-def bitmap_to_bool(bs: bytes):
-    bool_bitmap = list()
+def empty_bitmap(num_pieces) -> List[bool]:
+    return [False for _ in range(num_pieces)]
+
+def data_to_bitmap(download_fpath: Path, num_pieces=None) -> List[bool]:
+    bitmap_fpath = get_bitmap_file(download_fpath)
+
+    # Se il file bitmap relativo al torrent NON esiste, allora crealo
+    # inserendo tutti 0
+    if not bitmap_fpath.exists():
+        assert num_pieces is not None
+        bitmap_fpath.touch()
+        
+        with open(bitmap_fpath, "w") as f:
+            f.write("0"*num_pieces)
+
+        return empty_bitmap(num_pieces)
     
-    for block in range(0, len(bs), 8):
+    with open(bitmap_fpath, "r") as f:
+        return [bool(int(x)) for x in f.read().strip()]
+
+def bitmap_to_bool(bs: bytes, num_pieces):
+    bool_bitmap = list()
+
+    for b in bs:
         for i in range(8):
-            bool_bitmap.append(((bs[block] >> (7-i)) & 1) == 1)
-    return bool_bitmap
+            bool_bitmap.append(bool(b >> (7-i) & 1))
+
+    return bool_bitmap[:num_pieces]
+
 
 def generate_peer_id(seed=None) -> bytes:
     if seed is not None:

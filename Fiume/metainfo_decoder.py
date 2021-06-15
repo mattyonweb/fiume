@@ -2,13 +2,16 @@ import bencodepy
 import hashlib
 import ipaddress
 import random
+from math import log2
 
 from typing import *
-
+    
 try:
+    import Fiume.config as config
     import Fiume.utils as utils
 except:
     import utils as utils
+    import config as config
     
 class MetaInfo(dict):
     """ 
@@ -26,8 +29,12 @@ Classe che contiene le informazioni del file .torrent
         self.info_hash = sha.digest()
 
         self.trackers  = self.__gather_trackers()
+
         self.piece_size = self[b"info"][b"piece length"]
         self.block_size = 16384 #16kb, standard
+        self.total_size = self[b"info"][b"length"]
+
+        self.num_pieces = len(self.pieces_hash)
         
     def __gather_trackers(self):
         """ Unites all possible trackers in a single list, useless """
@@ -53,12 +60,13 @@ class TrackerManager:
         responses = [r for r in self._request_peers_to_tracker() if r[:2] == b"d8"]
         
         self.peers: list = self.decode_peers(responses)
+        self.peers = [x for x in self.peers if x[1] != 6889]
 
 
     def _request_peers_to_tracker(self):
         import multiprocessing as mp
         
-        pool = mp.Pool(2*mp.cpu_count())
+        pool = mp.Pool(16*mp.cpu_count())
         results = pool.map(self._parallel_tracker_retriever, self.metainfo.trackers)
         pool.close()
 
@@ -80,7 +88,7 @@ class TrackerManager:
                 params={
                     "info_hash": self.metainfo.info_hash,
                     "peer_id": b"-PO2020-918277361230", # TODO: cambiare
-                    "port": 6888, # TODO: perché 6888?????
+                    "port": 6889, # TODO: perché 6888?????
                     "uploaded": "0",
                     "downloaded": "0",
                     "left": str(self.metainfo[b"info"][b"length"]),
@@ -106,6 +114,10 @@ class TrackerManager:
         for tracker_response in tracker_responses: 
             response_bencode = bencodepy.decode(tracker_response)
 
+            if not b"peers" in response_bencode:
+                print("No peers in answer")
+                continue
+            
             for raw_address in utils.split_in_chunks(response_bencode[b"peers"], 6):
                 ip = ipaddress.IPv4Address(raw_address[:4]).exploded
                 port = utils.to_int(raw_address[4:6])
@@ -126,3 +138,4 @@ if __name__ == "__main__":
         
     tm = TrackerManager(metainfo)
 
+    
