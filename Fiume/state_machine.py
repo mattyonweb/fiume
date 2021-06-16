@@ -12,12 +12,12 @@ import pathlib
 from typing.io import *
 from typing import *
 
-try:
-    import Fiume.config as config
-    import Fiume.utils as utils
-except:
-    import utils as utils
-    import config as config
+# try:
+import Fiume.config as config
+import Fiume.utils as utils
+# except:
+    # import utils as utils
+    # import config as config
 
 
 logging.basicConfig(
@@ -51,7 +51,7 @@ class Initiator(enum.Enum):
 class PeerManager:
     def __init__(self, socket,
                  metainfo, tracker_manager,
-                 out_fpath: pathlib.Path,
+                 options: Dict[str, Any],
                  initiator: Initiator):
         
         # Peer socket
@@ -64,7 +64,8 @@ class PeerManager:
         
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
-
+        self.options = options
+        
         # Ok
         self.peer_chocking, self.am_choking = True, True
         self.peer_interested, self.am_interested = False, False
@@ -74,11 +75,11 @@ class PeerManager:
         self.received_handshake, self.sent_handshake = False, False
 
         # Queues for inter-thread communication
-        self.queue_to_elaborate = queue.Queue()
-        self.queue_to_send_out  = queue.Queue()
+        self.queue_to_elaborate: queue.Queue = queue.Queue()
+        self.queue_to_send_out: queue.Queue  = queue.Queue()
 
         # Output file
-        self.out_fpath: pathlib.Path = self.initialize_file(out_fpath)
+        self.out_fpath: pathlib.Path = self.initialize_file(self.options["output_file"])
 
         # Bitmaps of my/other pieces
         self.my_bitmap:   List[bool] = utils.data_to_bitmap(
@@ -96,7 +97,7 @@ class PeerManager:
 
         self.max_concurrent_pieces = 4
         
-        self.old_messages = list()
+        self.old_messages: List[Tuple[str, bytes]] = list()
         self.completed = False
 
         
@@ -170,8 +171,7 @@ class PeerManager:
     
     # Thread a sé stante
     def message_receiver(self):
-        while (handshake_mex := self.socket.recv(68)) == b"":
-            continue
+        handshake_mex = self.socket.recv(68)
 
         try:
             self.message_interpreter(handshake_mex)
@@ -202,11 +202,16 @@ class PeerManager:
     def message_sender(self):
         while True:
             mex = self.queue_to_send_out.get()
+
+            if "delay" in self.options:
+                time.sleep(self.options["delay"])
+            
             self.socket.sendall(mex)
 
 
     def shutdown(self):
         self.logger.debug("Shutdown after receiving empty message from peer")
+        self.tracker_manager.all_notify_completed()
         exit(0)
         # TODO
         
@@ -345,7 +350,7 @@ class PeerManager:
                     utils.to_bytes(kwargs["piece_offset"], length=4) +
                     payload)
 
-        else:
+        if mex is None:
             raise Exception("Messaggio impossibile da costruire")
 
         self.old_messages.append(("self", mex))
@@ -386,15 +391,15 @@ class PeerManager:
                 self.send_message(MexType.NOT_INTERESTED)
             return
         
-        elif (self.am_interested): # Se già mi interessava qualcosa, non fare nulla
+        if self.am_interested: # Se già mi interessava qualcosa, non fare nulla
             return
 
-        else: # Altrimenti dichiara il tuo interesse
-            self.am_interested = True
-            self.logger.debug("Sending INTERESTED message")
-            self.send_message(MexType.INTERESTED)
-            self.ask_for_new_pieces()
-            return
+        # Altrimenti dichiara il tuo interesse
+        self.am_interested = True
+        self.logger.debug("Sending INTERESTED message")
+        self.send_message(MexType.INTERESTED)
+        self.ask_for_new_pieces()
+        return
 
     def get_piece_size(self, piece_index):
         """ 
@@ -412,8 +417,8 @@ class PeerManager:
 
         if last_piece_size != 0:
             return last_piece_size
-        else:
-            return self.metainfo.piece_size
+        
+        return self.metainfo.piece_size
 
 
         
@@ -649,8 +654,7 @@ class PeerManager:
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
 class ThreadedServer:
-    def __init__(self, port, metainfo, tracker_manager,
-                 thread_timeout=None, thread_delay=0, **options):
+    def __init__(self, port, metainfo, tracker_manager, **options):
         self.host = "localhost"
         self.peer = None
         self.options = options
@@ -658,25 +662,31 @@ class ThreadedServer:
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
         
-        print("Binding della socket a", (self.host, port))
+        print("Server is binding at", (self.host, port))
         
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.host, port))
 
         self.port = self.sock.getsockname()[1]
-                
+        print("Self port: ", self.port)
+        
     def listen(self):
         self.sock.listen(5) # Numero massimo di connessioni in attesa (?)
 
         while True:
+            print("In attesa di connessioni...")
+            
             client_socket, address = self.sock.accept()
+
+            print(f"Connesso: {address}")
             
             newPeer = PeerManager(
                 client_socket,
                 self.metainfo,
                 self.tracker_manager,
-                open(self.options["output_file"], "rb+"),
+                # self.options["output_file"],
+                self.options,
                 Initiator.OTHER
             )
 
@@ -684,7 +694,7 @@ class ThreadedServer:
             
             t = threading.Thread(target = newPeer.main)
             t.start()
-            t.join(1)
+            # t.join(1)
             # return newPeer
 
             
@@ -696,7 +706,8 @@ class ThreadedServer:
             new_socket,
             self.metainfo,
             self.tracker_manager,
-            pathlib.Path(self.options["output_file"]),
+            # pathlib.Path(self.options["output_file"]),
+            self.options,
             Initiator.SELF
         )
 
@@ -708,39 +719,40 @@ class ThreadedServer:
         return newPeer
 
 
-import sys
-try:
-    import Fiume.metainfo_decoder as md
-except:
-    import metainfo_decoder as md
+# import sys
+# try:
+import Fiume.metainfo_decoder as md
+# except:
+    # import metainfo_decoder as md
 import bencodepy
 
+
 options = {
-    # "torrent_path": "/home/groucho/Luca rantolo.mp3.torrent",
-    # "output_file": "/home/groucho/torrent/asd/downloaded.mp3",
-    "torrent_path": "/home/groucho/torrent/image.jpg.torrent",
-    "output_file": "/home/groucho/torrent/asd/image.jpg",
+    "torrent_path": pathlib.Path("/home/groucho/torrent/image.jpg.torrent"),
+    "output_file":  pathlib.Path("/home/groucho/torrent/asd/image.jpg"),
+    "delay": 0.2,
 }
 
-with open(options["torrent_path"], "rb") as f:
-    metainfo = md.MetaInfo(bencodepy.decode(f.read()))
-            
-# if __name__ == "__main__":
-self_port_num = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 
-# try:
 with open(options["torrent_path"], "rb") as f:
     metainfo = md.MetaInfo(bencodepy.decode(f.read()))
 
-tm = md.TrackerManager(metainfo)
+tm = md.TrackerManager(metainfo, options)
 
 t = ThreadedServer(
-    self_port_num,
-    metainfo, tm,
+    50146, metainfo, tm,
     **options
 )
 
-peer = tm.peers[0]
-print(peer)
-pm = t.connect_as_client(*peer)
 
+th = threading.Thread(target=t.listen)
+th.start()
+
+# try:
+#     peer = tm.peers[0]
+#     print(peer)
+#     pm = t.connect_as_client(*peer)
+# except Exception as e:
+#     print(e)
+#     breakpoint()
+#     raise(e)

@@ -19,5 +19,5 @@ A toy BitTorrent client written in python, based on the official [specs](https:/
 - Support DHT, Message Stream Encryption or any other extension 
 - Manage more than one download at a time (although you could spawn more than one Fiume process to do that)
 - Download from more than one peer concurrently
+- Offer a decent CLI or GUI
 - It can download, but I'm not so sure about uploading (correctly)
-

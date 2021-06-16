@@ -1,17 +1,16 @@
 import random
+import os
+
 from typing import *
 from typing.io import *
-import enum
-import os
 from pathlib import Path
-import bitmap
 
-try:
-    import Fiume.config as config
-except:
-    import config as config
+# try:
+import Fiume.config as config
+# except:
+    # import config as config
 
-def bool_to_bitmap(bs: List[bool]) -> bytearray:
+def bool_to_bitmap(bs: List[bool]) -> bytes:
     bitmap = bytearray()
 
     for byte_ in range(0, len(bs), 8):
@@ -22,14 +21,14 @@ def bool_to_bitmap(bs: List[bool]) -> bytearray:
 
     return bytes(bitmap)
 
-def to_int(b: bytes):
+def to_int(b: bytes) -> int:
     return int.from_bytes(b, byteorder="big", signed=False) 
-def to_bytes(n: int, length=1):
+def to_bytes(n: int, length=1) -> bytes:
     return int.to_bytes(n, length=length, byteorder="big")
 
 HANDSHAKE_PREAMBLE = to_bytes(19) + b"BitTorrent protocol"
 
-def split_in_chunks(l, length):
+def split_in_chunks(l: List, length: int) -> List:
     out=list()
     for i in range(0, len(l), length):
         out.append(l[i:i+length])
@@ -77,7 +76,7 @@ def data_to_bitmap(download_fpath: Path, num_pieces=None) -> List[bool]:
     with open(bitmap_fpath, "r") as f:
         return [bool(int(x)) for x in f.read().strip()]
 
-def bitmap_to_bool(bs: bytes, num_pieces):
+def bitmap_to_bool(bs: bytes, num_pieces: int) -> List[bool]:
     bool_bitmap = list()
 
     for b in bs:
@@ -93,7 +92,7 @@ def generate_peer_id(seed=None) -> bytes:
 
     return config.CLIENT_INFO + bytes([random.randint(65, 90) for _ in range(12)])
 
-def determine_size_of(f: BinaryIO):
+def determine_size_of(f: BinaryIO) -> int:
     old_file_position = f.tell()
     f.seek(0, os.SEEK_END)
     size = f.tell()
