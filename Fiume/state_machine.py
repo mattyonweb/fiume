@@ -672,17 +672,20 @@ class ThreadedServer:
         self.peer = None
         self.options = options
 
+        self.logger = logging.getLogger("ThreadedServer")
+        self.logger.debug("__init__")
+        
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
-        
-        print("Server is binding at", (self.host, port))
+
+        self.logger.debug("Server is binding at %s", (self.host, port))
         
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.host, port))
 
         self.port = self.sock.getsockname()[1]
-        print("Self port: ", self.port)
+        self.logger.debug("Self port: %d", self.port)
 
         self.peers = self.tracker_manager.notify_start()
 
@@ -696,38 +699,35 @@ class ThreadedServer:
         listen_t = threading.Thread(target=self.listen)
         listen_t.start()
 
-        peers_threads = dict()
-        for (ip, p) in self.peers:
-            if p != self.port:
-                peers_threads[(ip, p)] = threading.Thread(
-                    target=self.connect_as_client, args=(ip, p)
-                )
+        while len(currently_connected_in < max_peer_connections):
+            ip, port = random.choice(peers_threads)
+            
+            if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
+                self.logger.debug("Attempting to connect to myself (%s): abort", (ip, port))
+                time.sleep(2)
+                continue
 
-        # Avvio connessioni con i peers
-        with self.currently_connected_lock:
-            while len(self.currently_connected) < self.max_peer_connections:
-                ip, p = random.choice(peers_threads)
-                q_from, q_to = queue.Queue(), queue.Queue()
+            try:
+                q_from, q_to = queue.Queue(), queue.Queue() 
+                new_thread = self.connect_as_client(ip, port, (q_from, q_to)) # TODO: controlla se ordine giusto
+            except Exception as e:
+                self.logger.debug("%s", e)
+                time.sleep(2)
+                continue
 
-                try:
-                    new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
-                    new_socket.connect((ip, self.port))
-                except Exception as e:
-                    print(e)
-                    continue
+            self.currently_connected_out.append((new_thread, q_from, q_to))
+            # Problema: come sapere quando un peer si disconnette?
 
-                
-
-        
-
-                
     def listen(self):
+        self.logger.debug("Started listening on %s", (self.host, self.port))
+        self.logger.debug("Max connections number: %d", self.max_peer_connections)
+        
         self.sock.listen(self.max_peer_connections) # Numero massimo di connessioni in attesa (?)
 
         while True:
-            print("In attesa di connessioni...")
+            self.logger.debug("Waiting for connections...")
             client_socket, address = self.sock.accept()
-            print(f"Connesso: {address}")
+            self.logger.debug("Received connection request from: %s", address)
             
             newPeer = PeerManager(
                 client_socket,
@@ -741,24 +741,27 @@ class ThreadedServer:
             
             t = threading.Thread(target = newPeer.main)
             t.start()
-            # t.join(1)
-            # return newPeer
 
             
-    def connect_as_client(self, ip, port, queue):
+    def connect_as_client(self, ip, port, queues: Tuple):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
         new_socket.connect((ip, port))
+
+        self.logger.debug("Actively connecting to %s", (ip, port))
         
         newPeer = PeerManager(
             new_socket,
             self.metainfo,
             self.tracker_manager,
-            (None, None),
+            queues,
             self.options,
             Initiator.SELF
         )
 
-        return newPeer
+        t = threading.Thread(target = newPeer.main)
+        t.start()
+        return t
+        # return newPeer
 
 ###############################
 

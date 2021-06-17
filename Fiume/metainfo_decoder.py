@@ -144,7 +144,6 @@ class TrackerManager:
         """
         self.logger.debug("Informing trackers I'm starting to download, asking for peers")
         self.logger.debug("%s", self.base_params())
-        exit()
         
         results = self.tell_all_trackers(
             {"event": "started"}
@@ -162,6 +161,7 @@ class TrackerManager:
             self.working_trackers.append(tracker_url)
 
             response_bencode = bencodepy.decode(response)
+            print(tracker_url, response_bencode)
             self.tracker_ids[tracker_url] = (
                 response_bencode[b"tracker id"] if b"tracker id" in response_bencode else b""
             )
