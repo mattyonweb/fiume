@@ -5,11 +5,12 @@ from typing import *
 from typing.io import *
 from pathlib import Path
 
-# try:
+import enum
 import Fiume.config as config
-# except:
-    # import config as config
 
+class MasterMex(enum.Enum):
+    KILL = 0
+    
 def bool_to_bitmap(bs: List[bool]) -> bytes:
     bitmap = bytearray()
 
@@ -98,3 +99,38 @@ def determine_size_of(f: BinaryIO) -> int:
     size = f.tell()
     f.seek(old_file_position, os.SEEK_SET)
     return size
+
+def sha1(data: bytes) -> bytes:
+    import hashlib
+
+    sha = hashlib.sha1()
+    sha.update(data)
+    return sha.digest()
+
+def already_started_download(download_fpath: Path):
+    """ 
+    Heuristic, not necessarily correct!
+    """
+    
+    bitmap_fpath = get_bitmap_file(download_fpath)
+
+    if not download_fpath.exists():
+        return False
+    if not bitmap_fpath.exists(): # TODO: ????
+        return False
+    
+    return True
+
+def already_completed_download(download_fpath: Path):
+    """ 
+    Heuristic, not necessarily correct!
+    """
+    
+    bitmap_fpath = get_bitmap_file(download_fpath)
+
+    if not bitmap_fpath.exists():
+        return False
+    
+    with open(bitmap_fpath, "r") as f:
+        return all([bool(x) for x in f.read().strip()])
+    

@@ -51,6 +51,7 @@ class Initiator(enum.Enum):
 class PeerManager:
     def __init__(self, socket,
                  metainfo, tracker_manager,
+                 master_queues: Tuple[queue.Queue, queue.Queue],
                  options: Dict[str, Any],
                  initiator: Initiator):
         
@@ -75,7 +76,7 @@ class PeerManager:
         self.received_handshake, self.sent_handshake = False, False
 
         # Queues for inter-thread communication
-        self.queue_to_elaborate: queue.Queue = queue.Queue()
+        self.queue_from_master, self.queue_to_master = master_queues
         self.queue_to_send_out: queue.Queue  = queue.Queue()
 
         # Output file
@@ -169,6 +170,18 @@ class PeerManager:
         return fpath
 
     
+    # TODO
+    def master_receiver(self):
+        while True:
+            mex = self.queue_from_master.get()
+            if mex == utils.MasterMex.KILL:
+                # Invia messaggi di KILL ai thread message_receier/sender
+                pass # TODO
+            
+    def master_sender(self, mex):
+        self.queue_to_master.put(mex)
+
+        
     # Thread a sé stante
     def message_receiver(self):
         handshake_mex = self.socket.recv(68)
@@ -475,7 +488,7 @@ class PeerManager:
             self.logger.debug("Already downloading at the fullest")
             return
                 
-        random_piece = random.choices(
+        random_piece = random.sample(
             list(not_yet_started), #non si può fare random choice su set()
             k=min(self.max_concurrent_pieces - len(self.my_progresses),
                   len(not_yet_started))
@@ -670,22 +683,56 @@ class ThreadedServer:
 
         self.port = self.sock.getsockname()[1]
         print("Self port: ", self.port)
+
+        self.peers = self.tracker_manager.notify_start()
+
+        self.max_peer_connections = 1
+        self.currently_connected_out  = list()
+        self.currently_connected_in   = list()
+        self.currently_connected_lock = threading.Lock()
+
         
+    def main(self):
+        listen_t = threading.Thread(target=self.listen)
+        listen_t.start()
+
+        peers_threads = dict()
+        for (ip, p) in self.peers:
+            if p != self.port:
+                peers_threads[(ip, p)] = threading.Thread(
+                    target=self.connect_as_client, args=(ip, p)
+                )
+
+        # Avvio connessioni con i peers
+        with self.currently_connected_lock:
+            while len(self.currently_connected) < self.max_peer_connections:
+                ip, p = random.choice(peers_threads)
+                q_from, q_to = queue.Queue(), queue.Queue()
+
+                try:
+                    new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
+                    new_socket.connect((ip, self.port))
+                except Exception as e:
+                    print(e)
+                    continue
+
+                
+
+        
+
+                
     def listen(self):
-        self.sock.listen(5) # Numero massimo di connessioni in attesa (?)
+        self.sock.listen(self.max_peer_connections) # Numero massimo di connessioni in attesa (?)
 
         while True:
             print("In attesa di connessioni...")
-            
             client_socket, address = self.sock.accept()
-
             print(f"Connesso: {address}")
             
             newPeer = PeerManager(
                 client_socket,
                 self.metainfo,
                 self.tracker_manager,
-                # self.options["output_file"],
                 self.options,
                 Initiator.OTHER
             )
@@ -698,34 +745,25 @@ class ThreadedServer:
             # return newPeer
 
             
-    def connect_as_client(self, ip, port):
+    def connect_as_client(self, ip, port, queue):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
         new_socket.connect((ip, port))
-                
+        
         newPeer = PeerManager(
             new_socket,
             self.metainfo,
             self.tracker_manager,
-            # pathlib.Path(self.options["output_file"]),
+            (None, None),
             self.options,
             Initiator.SELF
         )
 
-        self.peer = newPeer
-        
-        t = threading.Thread(target = newPeer.main)
-        t.start()
-        t.join(2)
         return newPeer
 
+###############################
 
-# import sys
-# try:
 import Fiume.metainfo_decoder as md
-# except:
-    # import metainfo_decoder as md
 import bencodepy
-
 
 options = {
     "torrent_path": pathlib.Path("/home/groucho/torrent/image.jpg.torrent"),
@@ -733,17 +771,16 @@ options = {
     "delay": 0.2,
 }
 
-
 with open(options["torrent_path"], "rb") as f:
     metainfo = md.MetaInfo(bencodepy.decode(f.read()))
 
 tm = md.TrackerManager(metainfo, options)
 
 t = ThreadedServer(
-    50146, metainfo, tm,
+    50146,
+    metainfo, tm,
     **options
 )
-
 
 th = threading.Thread(target=t.listen)
 th.start()
