@@ -4,20 +4,16 @@ import time
 import threading
 import logging
 import enum
-import queue
 import os
 import random
 import pathlib 
 
+from queue import Queue
 from typing.io import *
 from typing import *
 
-# try:
 import Fiume.config as config
 import Fiume.utils as utils
-# except:
-    # import utils as utils
-    # import config as config
 
 
 logging.basicConfig(
@@ -49,23 +45,29 @@ class Initiator(enum.Enum):
 
 
 class PeerManager:
-    def __init__(self, socket,
+    def __init__(self, socket: Tuple,
                  metainfo, tracker_manager,
-                 master_queues: Tuple[queue.Queue, queue.Queue],
+                 master_queues: Tuple[Queue, Queue],
+                 initial_bitmap: List[bool],
                  options: Dict[str, Any],
                  initiator: Initiator):
         
         # Peer socket
-        self.socket = socket
-        self.peer_ip, self.peer_port = self.socket.getsockname()
+        self.socket, self.address = socket
+        self.peer_ip, self.peer_port = self.address
+        # self.peer_ip, self.peer_port = self.socket.getsockname()
+        # self.address = self.socket.getsockname() # TODO
         
         self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
         self.logger.debug("__init__")
-        
-        
+                
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
+
         self.options = options
+        self.debug = False
+        if "debug" in self.options:
+            self.debug = self.options["debug"]
         
         # Ok
         self.peer_chocking, self.am_choking = True, True
@@ -78,19 +80,18 @@ class PeerManager:
         # Queues for inter-thread communication
         self.queue_in, self.queue_to_master = master_queues
 
+        # Bitmaps of my/other pieces
+        self.my_bitmap = initial_bitmap
+        self.peer_bitmap: List[bool] = utils.empty_bitmap(self.metainfo.num_pieces)
+
         # Output file
         self.out_fpath: pathlib.Path = self.initialize_file(self.options["output_file"])
-
-        # Bitmaps of my/other pieces
-        self.my_bitmap:   List[bool] = utils.data_to_bitmap(
-            self.out_fpath,
-            num_pieces=self.metainfo.num_pieces
-        )
-        self.peer_bitmap: List[bool] = utils.empty_bitmap(self.metainfo.num_pieces)
 
         # Blocks that I don't have but my peer has
         self.am_interested_in: List[int] = list()
         self.peer_interested_in: List[int] = list()
+
+        self.pending: List[int] = list()
         
         self.my_progresses: Dict[int, Tuple[int, int]] = dict()
         self.peer_progresses: Dict[int, Tuple[int, int]] = dict()
@@ -113,8 +114,19 @@ class PeerManager:
 
         self.message_interpreter()
 
+        
+    def send_to_master(self, mex: utils.MasterMex):
+        """
+        Sends a message to the master's queue.
+        """
+        self.queue_to_master.put(mex)
 
+        
     def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
+        """
+        Reads data at a given offset from the downloaded file. Used when peer
+        asks me for a piece.
+        """
         if piece_length == 0:
             piece_length = self.get_piece_size(piece_index)
 
@@ -124,7 +136,11 @@ class PeerManager:
 
         return data
 
+    
     def write_data(self, piece_index, piece_offset, payload):
+        """
+        Writes data at a given offset on the downloaded file.
+        """
         with open(self.out_fpath, "rb+") as file:
             file.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
             return file.write(payload)
@@ -138,8 +154,11 @@ class PeerManager:
             self.logger.debug("Sending BITFIELD")
             self.send_message(MexType.BITFIELD)
 
+
     def receive_handshake(self, mex):
-        self.convalidate_handshake(mex)
+        # Handshake ricevuta è corretta (info_hash matchano)
+        assert mex[28:48] == self.metainfo.info_hash
+        
         self.received_handshake = True
         self.logger.debug("Received HANDSHAKE")
         
@@ -147,10 +166,7 @@ class PeerManager:
             self.logger.debug("Sending BITFIELD")
             self.send_message(MexType.BITFIELD)
         else:
-            self.send_handshake()
-            
-    def convalidate_handshake(self, mex:bytes):
-        assert mex[28:48] == self.metainfo.info_hash
+            self.send_handshake()        
 
 
     def initialize_file(self, fpath: pathlib.Path):
@@ -165,10 +181,6 @@ class PeerManager:
 
         return fpath
 
-            
-    def master_sender(self, mex):
-        self.queue_to_master.put(mex)
-
         
     # Thread a sé stante
     def message_socket_receiver(self):
@@ -180,6 +192,10 @@ class PeerManager:
             raw_length = self.socket.recv(4)
             length = int.from_bytes(raw_length, byteorder="big", signed=False)
 
+            if length == 0:
+                self.queue_in.put(b"")
+                break
+            
             raw_mex = bytes()
             while length != 0:
                 data = self.socket.recv(length)
@@ -188,18 +204,16 @@ class PeerManager:
                 if length < 0:
                     breakpoint()
                     _ = 0
-                if length != 0:
+                if length != 0 and self.debug:
                     print(f"Still waiting for {length} bytes...")
 
             self.queue_in.put(raw_length + raw_mex)
-            # self.message_interpreter(raw_length + raw_mex)
 
     
     def shutdown(self):
         self.logger.debug("Shutdown after receiving empty message from peer")
         self.tracker_manager.notify_completion()
         exit(0)
-        # TODO
 
     
     def try_unchoke_peer(self):
@@ -229,11 +243,14 @@ class PeerManager:
             # Messagi di controllo (ie. da Master) vengono intoltrati a questa funzione
             if isinstance(mex, utils.MasterMex):
                 self.control_message_interpreter(mex)
+                continue
 
             # TODO: messaggio vuoto b"" = fine scambio o errore di rete
             if mex == b"":
+                print("Shutdown")
                 self.shutdown()
-                
+                break
+            
             try:
                 mex_type = MexType(mex[4])
             except Exception as e:
@@ -291,18 +308,19 @@ class PeerManager:
 
             
     def control_message_interpreter(self, mex: utils.MasterMex):
-        # TODO: Invia messaggi di KILL ai thread message_receier/sender
         if isinstance(mex, utils.M_KILL):
             self.logger.debug("Received KILL from master")
-            self.master_sender(utils.M_DEBUG("Got KILLED"))
+            self.send_to_master(utils.M_DEBUG("Got KILLED"))
             pass
         
         elif isinstance(mex, utils.M_DEBUG):
             self.logger.debug("Received DEBUG message from master: %s", mex.data)
-            self.master_sender(utils.M_DEBUG("Got DEBUGGED"))
+            self.send_to_master(utils.M_DEBUG("Got DEBUGGED"))
+
+        elif isinstance(mex, utils.M_SCHEDULE):
+            self.pending += mex.pieces_index
+            self.ask_for_new_pieces() # TODO?
             
-        else:
-            pass # TODO
         
         
     def send_message(self, mexType: MexType, **kwargs):
@@ -388,8 +406,9 @@ class PeerManager:
         for i, (m,p) in enumerate(zip(self.my_bitmap, self.peer_bitmap)):
             if not m and p:
                 self.am_interested_in.append(i)
-
                 
+        self.send_to_master(utils.M_PEER_HAS(self.am_interested_in, self.address))
+        
         # Se, dal confronto fra la mia e l'altrui bitmap, scopro
         # che non mi interessa nulla di ciò che ha il peer, informalo che
         # sei NOT_INTERESTED
@@ -445,23 +464,30 @@ class PeerManager:
                 MexType.REQUEST,
                 piece_index=piece_idx,
                 piece_offset=0,
-                # complicato, ma serve per gestire irregolarità ultimo piece: così
-                # non richiedi più bytes di quelli di cui è composto l'ultimo piece
                 piece_length=piece_length
             )
         except Exception as e:
             breakpoint()
             raise e
+
+        # Inform the master that I have requested a new piece"
+        self.send_to_master(
+            utils.M_DEBUG("Requested new piece {piece_idx}", (self.peer_ip, self.peer_port))
+        )
         
         # self.get_piece_size serve per gestire len irregolare dell'ultimo piece
-        self.my_progresses[piece_idx] = (0, self.get_piece_size(piece_idx))
+        self.my_progresses[piece_idx] = (b"", self.get_piece_size(piece_idx))
 
         
         
     def ask_for_new_pieces(self):
-        """ Richiedo un pezzo completamente nuovo, cioè non già in self.progresses """
-        
-        if len(self.am_interested_in) == 0:
+        """ 
+        Richiedo un pezzo completamente nuovo, cioè non già in self.progresses
+        """
+
+        if len(self.am_interested_in) == 0 or len(self.pending) == 0:
+            if len(self.pending) == 0:
+                self.logger.debug("No pieces pending!")
             self.logger.debug("Nothing to be interested in")
             self.logger.debug("Sending NOT-INTERESTED message")
             if self.am_interested:
@@ -474,7 +500,9 @@ class PeerManager:
             return
 
         not_yet_started = set(self.am_interested_in) - set(self.my_progresses.keys())
-
+        # breakpoint()
+        not_yet_started = not_yet_started.intersection(set(self.pending))
+        
         # Se tutti i pieces sono già stati avviati o completati
         if len(not_yet_started) == 0:
             self.logger.debug("No NEW pieces are requestable; abort")
@@ -515,7 +543,8 @@ class PeerManager:
         else:
             piece_idx = random.choice(list(self.my_progresses.keys()))
 
-        (offset_start, total_len) = self.my_progresses[piece_idx]
+        (data_already_downloaded, total_len) = self.my_progresses[piece_idx]
+        offset_start = len(data_already_downloaded)
         self.logger.debug("Will continue with piece %d from offset %d", piece_idx, offset_start)
         
         self.send_message(
@@ -529,33 +558,33 @@ class PeerManager:
     def manage_received_have(self, piece_index: int):
         self.logger.debug("Acknowledging that peer has new piece %d", piece_index)
         self.peer_bitmap[piece_index] = True
+        # TODO informa master
 
         
     def manage_received_piece(self, piece_index, piece_offset, piece_payload):
-        # Se è il primo frammento del pezzo XX che ricevo, crea una bytestring
-        # fatta di soli caratteri NULL
         if self.my_bitmap[piece_index]:
-            self.logger.warning("Received fragment of piece %d offset %d, but I have piece it already (len: %d)",
-                                piece_index, piece_offset, len(piece_payload))
+            self.logger.warning(
+                "Received fragment of piece %d offset %d, but I have piece it already (len: %d)",
+                piece_index, piece_offset, len(piece_payload)
+            )
             assert (
                 self.read_data(piece_index, piece_offset, len(piece_payload)) ==
                 piece_payload
             )
-
             return
 
-        num_written_bytes = self.write_data(piece_index, piece_offset, piece_payload)        
         
-        self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s, written %d: %s",
+        # self.write_data(piece_index, piece_offset, piece_payload)        
+        
+        self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s",
                           piece_index, piece_offset, len(piece_payload),
-                          piece_payload[:4], piece_payload[-4:],
-                          num_written_bytes,
-                          self.read_data(piece_index, piece_offset, 4))
+                          piece_payload[:4], piece_payload[-4:])
        
         # Aggiorna my_progersses
-        old_partial, old_total = self.my_progresses[piece_index]
+        old_data, piece_size = self.my_progresses[piece_index]
+        new_data = old_data + piece_payload
         
-        if old_partial + len(piece_payload) == old_total:
+        if len(new_data) == piece_size:
             self.logger.debug("Completed download of piece %d", piece_index)
             
             del self.my_progresses[piece_index]
@@ -566,6 +595,9 @@ class PeerManager:
             self.logger.debug("Setting my bitfield for piece %d as PRESENT", piece_index)
             self.update_my_bitmap(piece_index, True)
             self.am_interested_in.remove(piece_index)
+
+            self.pending.remove(piece_index)
+            self.send_to_master(utils.M_PIECE(piece_index, new_data, self.address))
             
             self.logger.debug("Sending HAVE for piece %d", piece_index)
             self.send_message(MexType.HAVE, piece_index=piece_index)
@@ -574,7 +606,7 @@ class PeerManager:
             self.ask_for_new_pieces()
             return
                               
-        self.my_progresses[piece_index] = (old_partial + len(piece_payload), old_total)
+        self.my_progresses[piece_index] = (new_data, piece_size)
         self.try_ask_for_piece(suggestion=piece_index)
 
 
@@ -642,6 +674,7 @@ class PeerManager:
 
         
     def verify_hash(self, piece_index):
+        return True # BUG # TODO
         import hashlib
 
         sha = hashlib.sha1()
@@ -660,6 +693,13 @@ class PeerManager:
             
 #################################ÀÀ
 
+class ConnectionStatus:
+    def __init__(self, address, queue_to):
+        self.address = address
+        self.peer_has = list()
+        self.assigned = list()
+        self.queue = queue_to
+        
 # Questo oggetto gestisce le connessioni entrambi.
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
@@ -684,37 +724,103 @@ class ThreadedServer:
         self.port = self.sock.getsockname()[1]
         self.logger.debug("Self port: %d", self.port)
 
+        self.options = options
         self.peers = self.tracker_manager.notify_start()
 
+        # La bitmap iniziale, quando il programma viene avviato.
+        # Viene letta da un file salvato in sessioni precedenti, oppure
+        # creata ad hoc.
+        self.global_bitmap: List[bool] = utils.data_to_bitmap(
+            self.options["output_file"],
+            num_pieces=self.metainfo.num_pieces
+        )
+        
         self.max_peer_connections = 1
-        self.currently_connected_out  = list()
-        self.currently_connected_in   = list()
-        self.currently_connected_lock = threading.Lock()
+        self.active_connections = dict()
+        self.queue_master_in = Queue()
 
         
-    # def main(self):
-    #     listen_t = threading.Thread(target=self.listen)
-    #     listen_t.start()
+    def main(self):        
+        master_listen_t = threading.Thread(target=self.master_queue_receiver)
+        master_listen_t.start()
+        
+        socket_listen_t = threading.Thread(target=self.listen)
+        socket_listen_t.start()        
 
-    #     while len(currently_connected_in < max_peer_connections):
-    #         ip, port = random.choice(peers_threads)
+        i = 0
+        while i < self.max_peer_connections:
+            ip, port = random.choice(self.peers)
+
+            if (ip, port) in self.active_connections:
+                self.logger.warning("Chosen an already connected peer")
+                time.sleep(1)
+                continue
             
-    #         if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
-    #             self.logger.debug("Attempting to connect to myself (%s): abort", (ip, port))
-    #             time.sleep(2)
-    #             continue
+            if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
+                self.logger.debug("Attempting to connect to myself (%s): abort", (ip, port))
+                time.sleep(2)
+                continue
 
-    #         try:
-    #             q_from, q_to = queue.Queue(), queue.Queue() 
-    #             new_thread = self.connect_as_client(ip, port, (q_from, q_to)) # TODO: controlla se ordine giusto
-    #         except Exception as e:
-    #             self.logger.debug("%s", e)
-    #             time.sleep(2)
-    #             continue
+            try:
+                q_to = Queue()
 
-    #         self.currently_connected_out.append((new_thread, q_from, q_to))
-    #         # Problema: come sapere quando un peer si disconnette?
+                connection = ConnectionStatus((ip, port), q_to)
+                self.active_connections[(ip, port)] = connection
+                self.connect_as_client(ip, port, (q_to, self.queue_master_in))
+                i += 1
+                
+            except Exception as e:
+                self.logger.debug("%s", e)
+                time.sleep(2)
+                continue
 
+        
+    def master_queue_receiver(self):
+        """ 
+        Infinite loop for handling messages coming from PeerManagers.
+        """
+        
+        while True:
+            mex = self.queue_master_in.get()
+
+            if isinstance(mex, utils.M_DEBUG):
+                self.logger.debug("%s", mex.data)
+
+            elif isinstance(mex, utils.M_PEER_HAS):
+                state = self.active_connections[mex.sender]
+
+                # Aggiorna stato connessione, il peer ha un nuovo pezzo
+                state.peer_has += mex.pieces_index
+
+                schedule_pieces = self.assign_pieces(mex.sender)
+
+                state.queue.put(utils.M_SCHEDULE(schedule_pieces))
+
+            elif isinstance(mex, utils.M_PIECE):
+                state = self.active_connections[mex.sender]
+                state.peer_has.remove(mex.piece_index)
+                
+            else:
+                self.logger.warning("Message not implemented: %s", mex)
+
+                
+    def assign_pieces(self, address:Tuple[str, int]):
+        """ 
+        Choose which pieces to assign a peer. The peer will receive these pieces,
+        and proceeds to download them.
+        """
+        
+        # queue_out  = self.active_connections[address]
+        # assignable = set(range(self.metainfo.num_pieces)) - set(self.assigned_pieces[address])
+        # to_assign  = random.sample(list(assignable),
+        #                            k=min(10, len(assignable)))
+        # queue_out.put(utils.M_SCHEDULE(to_assign))
+
+        # Ritorna tutti i pezzi che il peer ha ma noi no
+        return self.active_connections[address].peer_has
+        
+    ##############################
+    
     def listen(self):
         self.logger.debug("Started listening on %s", (self.host, self.port))
         self.logger.debug("Max connections number: %d", self.max_peer_connections)
@@ -727,10 +833,11 @@ class ThreadedServer:
             self.logger.debug("Received connection request from: %s", address)
             
             newPeer = PeerManager(
-                client_socket,
+                (client_socket, address),
                 self.metainfo,
                 self.tracker_manager,
                 (None, None), #TODO queues
+                self.global_bitmap,
                 self.options,
                 Initiator.OTHER
             )
@@ -741,26 +848,24 @@ class ThreadedServer:
             t.start()
 
             
-    def connect_as_client(self, ip, port):
+    def connect_as_client(self, ip, port, queues: Tuple[Queue]):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
         new_socket.connect((ip, port))
 
         self.logger.debug("Actively connecting to %s", (ip, port))
-
-        queues = (queue.Queue(), queue.Queue())
         
         newPeer = PeerManager(
-            new_socket,
+            (new_socket, (ip, port)),
             self.metainfo,
             self.tracker_manager,
             queues,
+            self.global_bitmap,
             self.options,
             Initiator.SELF
         )
 
         t = threading.Thread(target = newPeer.main)
-        t.start()
-        # return t
+        t.start()            
         return newPeer
 
 ###############################
@@ -772,6 +877,7 @@ options = {
     "torrent_path": pathlib.Path("/home/groucho/torrent/image.jpg.torrent"),
     "output_file":  pathlib.Path("/home/groucho/torrent/downloads/image.jpg"),
     "delay": 0,
+    "debug": False,
 }
 
 with open(options["torrent_path"], "rb") as f:
@@ -785,11 +891,12 @@ t = ThreadedServer(
     **options
 )
 
-th = threading.Thread(target=t.listen)
-th.start()
+t.main()
+# th = threading.Thread(target=t.listen)
+# th.start()
 
-peer = ("78.14.24.41", 50144)
-pm = t.connect_as_client(*peer)
+# peer = ("78.14.24.41", 50144)
+# pm = t.connect_as_client(*peer, (Queue(), Queue())
 
 # try:
 #     peer = tm.peers[0]

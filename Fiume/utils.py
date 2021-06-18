@@ -18,24 +18,39 @@ class M_KILL(MasterMex):
 
 @dataclass
 class M_SCHEDULE(MasterMex):
-    piece_index: int
+    pieces_index: List[int]
 
 @dataclass
 class M_DESCHEDULE(MasterMex):
-    piece_index: int
+    pieces_index: List[int]
 
 @dataclass
-class M_NEW_HAVE(MasterMex):
+class M_PEER_HAS(MasterMex):
+    pieces_index: List[int]
+    sender: Tuple[str, int]
+    
+@dataclass
+class M_PIECE(MasterMex):
+    """ When client finishes downloading a piece, then it sends this message
+    to the master, who will proceed to write it to file. """
     piece_index: int
-
+    data: bytes
+    sender: Tuple[str, int]
+    
 @dataclass
 class M_DATA_BLOCK(MasterMex):
     piece_index: int
     data: bytes
 
 @dataclass
+class M_BITMAP(MasterMex):
+    sender: Tuple[str, int]
+    bitmap: List[bool]
+
+@dataclass
 class M_DEBUG(MasterMex):
     data: Any
+    sender: Tuple[str, int] = None
 
 ###################################à
     
@@ -94,6 +109,8 @@ def data_to_bitmap(download_fpath: Path, num_pieces=None) -> List[bool]:
     # Se il file bitmap relativo al torrent NON esiste, allora crealo
     # inserendo tutti 0. Idem se esiste il bitmap file ma non esiste
     # il file scaricato (magari perché è stato eliminato)
+    print("BITMAP:", bitmap_fpath)
+    
     if ((not bitmap_fpath.exists()) or
         (bitmap_fpath.exists() and not download_fpath.exists())):
 

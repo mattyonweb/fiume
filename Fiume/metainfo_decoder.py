@@ -166,7 +166,7 @@ class TrackerManager:
                 response_bencode[b"tracker id"] if b"tracker id" in response_bencode else b""
             )
 
-            peers.union(self.__decode_peer(response_bencode))
+            peers = peers.union(self.__decode_peer(response_bencode))
 
         self.peers = list(peers)
         return list(peers)
