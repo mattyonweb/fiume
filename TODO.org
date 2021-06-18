@@ -7,6 +7,7 @@
 #+LATEX_HEADER: \input{$HOME/.emacs.d/latex-preamble.tex}
 
 * Urgent
+** Abilitare ricezione di SCEHDULES
 ** A peer must be able to both download and seed, at the same time
 ** Make multiple requests for different pieces at the same time
 

@@ -76,7 +76,7 @@ class PeerManager:
         self.received_handshake, self.sent_handshake = False, False
 
         # Queues for inter-thread communication
-        self.queue_from_master, self.queue_to_master = master_queues
+        self.queue_in, self.queue_to_master = master_queues
 
         # Output file
         self.out_fpath: pathlib.Path = self.initialize_file(self.options["output_file"])
@@ -104,11 +104,14 @@ class PeerManager:
     def main(self):
         self.logger.debug("main")
 
+        t1 = threading.Thread(target=self.message_socket_receiver)
+        t1.start()
+        
         # Stabilisce chi fra i due peers dovrà inviare il primo messaggio
         if self.initiator == Initiator.SELF:
             self.send_handshake()
 
-        self.message_receiver()
+        self.message_interpreter()
 
 
     def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
@@ -162,29 +165,16 @@ class PeerManager:
 
         return fpath
 
-    
-    # TODO
-    def master_receiver(self):
-        while True:
-            mex = self.queue_from_master.get()
-            if mex == utils.MasterMex.KILL:
-                self.logger.debug("Received KILL from master")
-                # Invia messaggi di KILL ai thread message_receier/sender
-                pass # TODO
             
     def master_sender(self, mex):
         self.queue_to_master.put(mex)
 
         
     # Thread a sé stante
-    def message_receiver(self):
+    def message_socket_receiver(self):
         handshake_mex = self.socket.recv(68)
 
-        try:
-            self.message_interpreter(handshake_mex)
-        except Exception as e:
-            breakpoint()
-            raise e
+        self.queue_in.put(handshake_mex)
         
         while True:
             raw_length = self.socket.recv(4)
@@ -200,8 +190,9 @@ class PeerManager:
                     _ = 0
                 if length != 0:
                     print(f"Still waiting for {length} bytes...")
-                
-            self.message_interpreter(raw_length + raw_mex)
+
+            self.queue_in.put(raw_length + raw_mex)
+            # self.message_interpreter(raw_length + raw_mex)
 
     
     def shutdown(self):
@@ -228,72 +219,92 @@ class PeerManager:
     
     #######
 
-    def message_interpreter(self, mex: bytes):
+    def message_interpreter(self):
         """ Elabora un messaggio ricevuto, decidendo come rispondere e/o
         che cosa fare. """
 
-        self.old_messages.append(("other", mex))
+        while True:
+            mex = self.queue_in.get()
 
-        # TODO: messaggio vuoto b"" = fine scambio o errore di rete
-        if mex == b"":
-            self.shutdown()
-            
-        try:
-            mex_type = MexType(mex[4])
-        except Exception as e:
-            breakpoint()
-            raise e
-            
-        self.logger.debug("Received message %s", str(mex_type))
+            # Messagi di controllo (ie. da Master) vengono intoltrati a questa funzione
+            if isinstance(mex, utils.MasterMex):
+                self.control_message_interpreter(mex)
 
-        if mex_type == MexType.HANDSHAKE:
-            self.receive_handshake(mex)
-
-        elif mex_type == MexType.KEEP_ALIVE:
-            self.send_message(MexType.KEEP_ALIVE)
-            
-        elif mex_type == MexType.CHOKE:
-            self.peer_chocking = True
-        elif mex_type == MexType.UNCHOKE:
-            self.peer_chocking = False
-            self.try_ask_for_piece()
-        elif mex_type == MexType.INTERESTED:
-            self.peer_interested = True
-            self.try_unchoke_peer()
-        elif mex_type == MexType.NOT_INTERESTED:
-            self.peer_interested = False
-            if not self.am_choking:
-                self.send_message(MexType.CHOKE)
+            # TODO: messaggio vuoto b"" = fine scambio o errore di rete
+            if mex == b"":
+                self.shutdown()
                 
-        elif mex_type == MexType.HAVE:
-            self.manage_received_have(utils.to_int(mex[5:9]))
+            try:
+                mex_type = MexType(mex[4])
+            except Exception as e:
+                breakpoint()
+                raise e
 
-        elif mex_type == MexType.BITFIELD:
-            self.interpret_received_bitfield(mex[5:])
+            self.logger.debug("Received message %s", str(mex_type))
 
-        elif mex_type == MexType.REQUEST:
-            piece_index  = utils.to_int(mex[5:9]) 
-            piece_offset = utils.to_int(mex[9:13]) 
-            piece_length = utils.to_int(mex[13:17]) 
-            self.manage_request(piece_index, piece_offset, piece_length)
+            if mex_type == MexType.HANDSHAKE:
+                self.receive_handshake(mex)
 
-        elif mex_type == MexType.PIECE:
-            piece_index  = utils.to_int(mex[5:9]) 
-            piece_offset = utils.to_int(mex[9:13])
-            piece_payload = mex[13:]
-            self.manage_received_piece(piece_index, piece_offset, piece_payload)
+            elif mex_type == MexType.KEEP_ALIVE:
+                self.send_message(MexType.KEEP_ALIVE)
 
-        elif mex_type == MexType.CANCEL:
-            print("CANCEL not implemented")
+            elif mex_type == MexType.CHOKE:
+                self.peer_chocking = True
+            elif mex_type == MexType.UNCHOKE:
+                self.peer_chocking = False
+                self.try_ask_for_piece()
+            elif mex_type == MexType.INTERESTED:
+                self.peer_interested = True
+                self.try_unchoke_peer()
+            elif mex_type == MexType.NOT_INTERESTED:
+                self.peer_interested = False
+                if not self.am_choking:
+                    self.send_message(MexType.CHOKE)
 
-        elif mex_type == MexType.PORT:
-            print("PORT not implemented")
+            elif mex_type == MexType.HAVE:
+                self.manage_received_have(utils.to_int(mex[5:9]))
 
-        else:
-            print("ricevuto messaggio sconosciuto")
-            breakpoint()
+            elif mex_type == MexType.BITFIELD:
+                self.interpret_received_bitfield(mex[5:])
+
+            elif mex_type == MexType.REQUEST:
+                piece_index  = utils.to_int(mex[5:9]) 
+                piece_offset = utils.to_int(mex[9:13]) 
+                piece_length = utils.to_int(mex[13:17]) 
+                self.manage_request(piece_index, piece_offset, piece_length)
+
+            elif mex_type == MexType.PIECE:
+                piece_index  = utils.to_int(mex[5:9]) 
+                piece_offset = utils.to_int(mex[9:13])
+                piece_payload = mex[13:]
+                self.manage_received_piece(piece_index, piece_offset, piece_payload)
+
+            elif mex_type == MexType.CANCEL:
+                print("CANCEL not implemented")
+
+            elif mex_type == MexType.PORT:
+                print("PORT not implemented")
+
+            else:
+                print("ricevuto messaggio sconosciuto")
+                breakpoint()
 
             
+    def control_message_interpreter(self, mex: utils.MasterMex):
+        # TODO: Invia messaggi di KILL ai thread message_receier/sender
+        if isinstance(mex, utils.M_KILL):
+            self.logger.debug("Received KILL from master")
+            self.master_sender(utils.M_DEBUG("Got KILLED"))
+            pass
+        
+        elif isinstance(mex, utils.M_DEBUG):
+            self.logger.debug("Received DEBUG message from master: %s", mex.data)
+            self.master_sender(utils.M_DEBUG("Got DEBUGGED"))
+            
+        else:
+            pass # TODO
+        
+        
     def send_message(self, mexType: MexType, **kwargs):
         if "delay" in self.options:
             time.sleep(self.options["delay"])
@@ -399,6 +410,7 @@ class PeerManager:
         self.ask_for_new_pieces()
         return
 
+    
     def get_piece_size(self, piece_index):
         """ 
         Utile, perché l'ultimo piece da scaricare ha lunghezza 

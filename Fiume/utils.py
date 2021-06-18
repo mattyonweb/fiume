@@ -4,12 +4,40 @@ import os
 from typing import *
 from typing.io import *
 from pathlib import Path
+from dataclasses import dataclass
 
 import enum
 import Fiume.config as config
 
-class MasterMex(enum.Enum):
-    KILL = 0
+class MasterMex:
+    pass
+
+@dataclass
+class M_KILL(MasterMex):
+    pass
+
+@dataclass
+class M_SCHEDULE(MasterMex):
+    piece_index: int
+
+@dataclass
+class M_DESCHEDULE(MasterMex):
+    piece_index: int
+
+@dataclass
+class M_NEW_HAVE(MasterMex):
+    piece_index: int
+
+@dataclass
+class M_DATA_BLOCK(MasterMex):
+    piece_index: int
+    data: bytes
+
+@dataclass
+class M_DEBUG(MasterMex):
+    data: Any
+
+###################################à
     
 def bool_to_bitmap(bs: List[bool]) -> bytes:
     bitmap = bytearray()
