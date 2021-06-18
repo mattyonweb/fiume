@@ -77,7 +77,6 @@ class PeerManager:
 
         # Queues for inter-thread communication
         self.queue_from_master, self.queue_to_master = master_queues
-        self.queue_to_send_out: queue.Queue  = queue.Queue()
 
         # Output file
         self.out_fpath: pathlib.Path = self.initialize_file(self.options["output_file"])
@@ -109,13 +108,7 @@ class PeerManager:
         if self.initiator == Initiator.SELF:
             self.send_handshake()
 
-        t1 = threading.Thread(target=self.message_receiver)
-        t2 = threading.Thread(target=self.message_sender)
-        t1.start()
-        t2.start()
-            
-        t1.join(2)
-        t2.join(2)
+        self.message_receiver()
 
 
     def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
@@ -175,6 +168,7 @@ class PeerManager:
         while True:
             mex = self.queue_from_master.get()
             if mex == utils.MasterMex.KILL:
+                self.logger.debug("Received KILL from master")
                 # Invia messaggi di KILL ai thread message_receier/sender
                 pass # TODO
             
@@ -195,7 +189,6 @@ class PeerManager:
         while True:
             raw_length = self.socket.recv(4)
             length = int.from_bytes(raw_length, byteorder="big", signed=False)
-            # raw_mex = self.socket.recv(length)
 
             raw_mex = bytes()
             while length != 0:
@@ -210,24 +203,14 @@ class PeerManager:
                 
             self.message_interpreter(raw_length + raw_mex)
 
-            
-    # Thread a sé stante
-    def message_sender(self):
-        while True:
-            mex = self.queue_to_send_out.get()
-
-            if "delay" in self.options:
-                time.sleep(self.options["delay"])
-            
-            self.socket.sendall(mex)
-
-
+    
     def shutdown(self):
         self.logger.debug("Shutdown after receiving empty message from peer")
-        self.tracker_manager.all_notify_completed()
+        self.tracker_manager.notify_completion()
         exit(0)
         # TODO
-        
+
+    
     def try_unchoke_peer(self):
         if not self.am_choking:
             self.logger.debug("Asked if could unchoke peer, but it is already unchoked")
@@ -312,7 +295,9 @@ class PeerManager:
 
             
     def send_message(self, mexType: MexType, **kwargs):
-        self.queue_to_send_out.put(self.make_message(mexType, **kwargs))
+        if "delay" in self.options:
+            time.sleep(self.options["delay"])
+        self.socket.sendall(self.make_message(mexType, **kwargs))
 
     def make_message(self, mexType: MexType, **kwargs) -> bytes:
         mex = None
@@ -695,28 +680,28 @@ class ThreadedServer:
         self.currently_connected_lock = threading.Lock()
 
         
-    def main(self):
-        listen_t = threading.Thread(target=self.listen)
-        listen_t.start()
+    # def main(self):
+    #     listen_t = threading.Thread(target=self.listen)
+    #     listen_t.start()
 
-        while len(currently_connected_in < max_peer_connections):
-            ip, port = random.choice(peers_threads)
+    #     while len(currently_connected_in < max_peer_connections):
+    #         ip, port = random.choice(peers_threads)
             
-            if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
-                self.logger.debug("Attempting to connect to myself (%s): abort", (ip, port))
-                time.sleep(2)
-                continue
+    #         if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
+    #             self.logger.debug("Attempting to connect to myself (%s): abort", (ip, port))
+    #             time.sleep(2)
+    #             continue
 
-            try:
-                q_from, q_to = queue.Queue(), queue.Queue() 
-                new_thread = self.connect_as_client(ip, port, (q_from, q_to)) # TODO: controlla se ordine giusto
-            except Exception as e:
-                self.logger.debug("%s", e)
-                time.sleep(2)
-                continue
+    #         try:
+    #             q_from, q_to = queue.Queue(), queue.Queue() 
+    #             new_thread = self.connect_as_client(ip, port, (q_from, q_to)) # TODO: controlla se ordine giusto
+    #         except Exception as e:
+    #             self.logger.debug("%s", e)
+    #             time.sleep(2)
+    #             continue
 
-            self.currently_connected_out.append((new_thread, q_from, q_to))
-            # Problema: come sapere quando un peer si disconnette?
+    #         self.currently_connected_out.append((new_thread, q_from, q_to))
+    #         # Problema: come sapere quando un peer si disconnette?
 
     def listen(self):
         self.logger.debug("Started listening on %s", (self.host, self.port))
@@ -733,6 +718,7 @@ class ThreadedServer:
                 client_socket,
                 self.metainfo,
                 self.tracker_manager,
+                (None, None), #TODO queues
                 self.options,
                 Initiator.OTHER
             )
@@ -743,11 +729,13 @@ class ThreadedServer:
             t.start()
 
             
-    def connect_as_client(self, ip, port, queues: Tuple):
+    def connect_as_client(self, ip, port):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
         new_socket.connect((ip, port))
 
         self.logger.debug("Actively connecting to %s", (ip, port))
+
+        queues = (queue.Queue(), queue.Queue())
         
         newPeer = PeerManager(
             new_socket,
@@ -760,8 +748,8 @@ class ThreadedServer:
 
         t = threading.Thread(target = newPeer.main)
         t.start()
-        return t
-        # return newPeer
+        # return t
+        return newPeer
 
 ###############################
 
@@ -770,8 +758,8 @@ import bencodepy
 
 options = {
     "torrent_path": pathlib.Path("/home/groucho/torrent/image.jpg.torrent"),
-    "output_file":  pathlib.Path("/home/groucho/torrent/asd/image.jpg"),
-    "delay": 0.2,
+    "output_file":  pathlib.Path("/home/groucho/torrent/downloads/image.jpg"),
+    "delay": 0,
 }
 
 with open(options["torrent_path"], "rb") as f:
@@ -787,6 +775,9 @@ t = ThreadedServer(
 
 th = threading.Thread(target=t.listen)
 th.start()
+
+peer = ("78.14.24.41", 50144)
+pm = t.connect_as_client(*peer)
 
 # try:
 #     peer = tm.peers[0]

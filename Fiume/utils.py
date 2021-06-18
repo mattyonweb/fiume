@@ -64,8 +64,12 @@ def data_to_bitmap(download_fpath: Path, num_pieces=None) -> List[bool]:
     bitmap_fpath = get_bitmap_file(download_fpath)
 
     # Se il file bitmap relativo al torrent NON esiste, allora crealo
-    # inserendo tutti 0
-    if not bitmap_fpath.exists():
+    # inserendo tutti 0. Idem se esiste il bitmap file ma non esiste
+    # il file scaricato (magari perché è stato eliminato)
+    if ((not bitmap_fpath.exists()) or
+        (bitmap_fpath.exists() and not download_fpath.exists())):
+
+        print("AOOOOOOOOOOOOOOOOOOo", download_fpath)
         assert num_pieces is not None
         bitmap_fpath.touch()
         
@@ -73,7 +77,7 @@ def data_to_bitmap(download_fpath: Path, num_pieces=None) -> List[bool]:
             f.write("0"*num_pieces)
 
         return empty_bitmap(num_pieces)
-    
+
     with open(bitmap_fpath, "r") as f:
         return [bool(int(x)) for x in f.read().strip()]
 
