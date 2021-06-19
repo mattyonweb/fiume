@@ -28,6 +28,10 @@ class M_DESCHEDULE(MasterMex):
 class M_PEER_HAS(MasterMex):
     pieces_index: List[int]
     sender: Tuple[str, int]
+
+@dataclass
+class M_NEW_HAVE(MasterMex):
+    piece_index: int
     
 @dataclass
 class M_PIECE(MasterMex):
