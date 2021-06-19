@@ -23,16 +23,22 @@ def repeat(times):
 class SinglePeer(unittest.TestCase):
 
     def setUp(self):
-        self.peer = Mock(address=("localhost", 50154), queue_in=Queue())
+        self.peer  = Mock(address=("localhost", 50154), queue_in=Queue())
+        self.peer2 = Mock(address=("localhost", 50155), queue_in=Queue())
+
         self.initial_bitmap = [False for _ in range(100)]
         
         self.mcu = master.MasterControlUnit(self.initial_bitmap)
         self.mcu.main()
         self.mcu.add_connection_to(self.peer)
-
+        
     def tearDown(self):
         self.mcu.queue_in.put(M_KILL())
 
+    def send_mcu(self, message):
+        """ Helper """
+        self.mcu.queue_in.put(message)
+        
     ##############################
     
     def test_when_i_have_nothing_and_peer_everything(self):
@@ -40,8 +46,8 @@ class SinglePeer(unittest.TestCase):
         When newly connected to a peer, the master should assign the 
         PeerManager 10 pieces to download. 
         """
-        self.mcu.queue_in.put(
-            M_PEER_HAS(list(range(100)), self.peer.address)
+        self.send_mcu(
+            M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=10)
         )
 
         mex_to_peer = self.peer.queue_in.get(timeout=1)
@@ -66,8 +72,8 @@ class SinglePeer(unittest.TestCase):
         2) update its own global bitmap
         3) assign a new piece to download to the peerManager
         """
-        self.mcu.queue_in.put(
-            M_PEER_HAS(list(range(100)), self.peer.address)
+        self.send_mcu(
+            M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=10)
         )
 
         # Master assigns schedules these pieces for the PeerManager 
@@ -75,7 +81,7 @@ class SinglePeer(unittest.TestCase):
 
         # We pretend that one of them has been received
         random_downloaded_piece = random.choice(scheduled_pieces) 
-        self.mcu.queue_in.put(
+        self.send_mcu(
             M_PIECE(random_downloaded_piece, b"", self.peer.address)
         )
 
@@ -101,3 +107,27 @@ class SinglePeer(unittest.TestCase):
             new_schedule
         )
        
+
+    def test_dont_ask_piece_already_scheduled_to_another_peer(self):
+        """
+        Peer1 has all pieces from [0..60];
+        Peer2 has all pieces from [50..100];
+        Master must not schedule, for peer2, any piece from 50..60
+        """
+        self.mcu.add_connection_to(self.peer2)
+        self.send_mcu(
+            M_PEER_HAS(list(range(60)),
+                       self.peer.address,
+                       schedule_new_pieces=60)
+        )
+        self.send_mcu(M_PEER_HAS(list(range(50, 100)), self.peer2.address))
+
+        p1_scheduled = self.peer.queue_in.get()
+        p2_scheduled = self.peer2.queue_in.get()
+
+        print(p1_scheduled)
+        
+        self.assertFalse(
+            any(x in range(50, 60) for x in p2_scheduled.pieces_index),
+            p2_scheduled.pieces_index
+        )

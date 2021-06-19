@@ -18,23 +18,23 @@ class ConnectionStatus:
         self.peer_has += pieces
 
         
-    def schedule_suggestions(self, n=10) -> List[int]:
-        """
-        Suggests n pieces to the peer.
-        """
-        candidates = set(self.peer_has) - self.already_suggested
+    # def schedule_suggestions(self, n=10) -> List[int]:
+    #     """
+    #     Suggests n pieces to the peer.
+    #     """
+    #     candidates = set(self.peer_has) - self.already_suggested
 
-        if len(candidates) == 0:
-            print("No candidates found...")
-            return []
+    #     if len(candidates) == 0:
+    #         print("No candidates found...")
+    #         return []
         
-        chosen = random.sample(
-            list(candidates),
-            k = min(n, len(candidates))
-        )
+    #     chosen = random.sample(
+    #         list(candidates),
+    #         k = min(n, len(candidates))
+    #     )
 
-        self.already_suggested |= set(chosen) #union
-        return chosen
+    #     self.already_suggested |= set(chosen) #union
+    #     return chosen
         
 
     
@@ -76,6 +76,41 @@ class MasterControlUnit:
         self.bitmap[new_piece] = True
         self.send_all(M_NEW_HAVE(new_piece))
 
+
+    def bitmap_to_set(self):
+        out = set()
+        for i in range(len(self.bitmap)):
+            if self.bitmap[i]:
+                out.add(i)
+        return out
+    
+    def yet_to_schedule(self, exception: Tuple):
+        out = set()
+        for addr, state in self.connections.items():
+            if addr == exception: continue
+            out |= state.already_suggested
+        return out
+        
+    def schedule_for(self, address, n=10):
+        state = self.connections[address]
+
+        candidates = (
+            set(state.peer_has) -
+            state.already_suggested -
+            self.yet_to_schedule(exception=address)
+        )
+
+        if len(candidates) == 0:
+            print("No candidates found...")
+            return []
+        
+        chosen = random.sample(
+            list(candidates),
+            k = min(n, len(candidates))
+        )
+
+        state.already_suggested |= set(chosen) #union
+        return chosen
         
     def receiver_loop(self):
         while True:
@@ -87,7 +122,10 @@ class MasterControlUnit:
                 status = self.connections[mex.sender]
                 status.update_peer_has(mex.pieces_index)
                 
-                answer = M_SCHEDULE(status.schedule_suggestions())
+                # answer = M_SCHEDULE(status.schedule_suggestions(n=mex.schedule_new_pieces))
+                answer = M_SCHEDULE(
+                    self.schedule_for(mex.sender, n=mex.schedule_new_pieces)
+                )
                 self.send_to(mex.sender, answer)
 
                 
@@ -96,7 +134,10 @@ class MasterControlUnit:
                 
                 self.update_global_bitmap(mex.piece_index)
                 self.send_to(mex.sender,
-                             M_SCHEDULE(status.schedule_suggestions(n=1)))
+                             M_SCHEDULE(self.schedule_for(mex.sender, n=mex.schedule_new_pieces)))
+
+                # self.send_to(mex.sender,
+                #              M_SCHEDULE(status.schedule_suggestions(n=mex.schedule_new_pieces)))
                 
             elif isinstance(mex, M_KILL):
                 break

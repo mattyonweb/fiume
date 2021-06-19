@@ -28,7 +28,9 @@ class M_DESCHEDULE(MasterMex):
 class M_PEER_HAS(MasterMex):
     pieces_index: List[int]
     sender: Tuple[str, int]
-
+    # How many new pieces ought the master schedule for the PeerManager, if any
+    schedule_new_pieces: int = 10
+    
 @dataclass
 class M_NEW_HAVE(MasterMex):
     piece_index: int
@@ -40,6 +42,8 @@ class M_PIECE(MasterMex):
     piece_index: int
     data: bytes
     sender: Tuple[str, int]
+    # How many new pieces ought the master schedule for the PeerManager
+    schedule_new_pieces: int = 1
     
 @dataclass
 class M_DATA_BLOCK(MasterMex):
