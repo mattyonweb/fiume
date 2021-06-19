@@ -7,7 +7,7 @@ from Fiume.utils import *
 class ConnectionStatus:
     def __init__(self, peer):
         self.queue_in = peer.queue_in
-        self.peer_has = list()
+        self.peer_has = set()
         self.already_suggested = set()
 
         
@@ -15,27 +15,16 @@ class ConnectionStatus:
         """
         Updates local list of pieces possessed by the peer.
         """
-        self.peer_has += pieces
+        self.peer_has |= set(pieces)
 
         
-    # def schedule_suggestions(self, n=10) -> List[int]:
-    #     """
-    #     Suggests n pieces to the peer.
-    #     """
-    #     candidates = set(self.peer_has) - self.already_suggested
+    def not_yet_scheduled(self) -> Set[int]:
+        """
+        Returns all the pieces that the peer has and that 
+        were not already scheduled for request.
+        """
+        return self.peer_has - self.already_suggested
 
-    #     if len(candidates) == 0:
-    #         print("No candidates found...")
-    #         return []
-        
-    #     chosen = random.sample(
-    #         list(candidates),
-    #         k = min(n, len(candidates))
-    #     )
-
-    #     self.already_suggested |= set(chosen) #union
-    #     return chosen
-        
 
     
 class MasterControlUnit:
@@ -54,7 +43,7 @@ class MasterControlUnit:
         
     def send_to(self, address, mex):
         """ 
-        Sends a message to a peer manager, through Queues.
+        Sends a message to a peer manager, through the appropriate queue.
         """
         self.connections[address].queue_in.put(mex)
 
@@ -83,35 +72,42 @@ class MasterControlUnit:
             if self.bitmap[i]:
                 out.add(i)
         return out
-    
-    def yet_to_schedule(self, exception: Tuple):
-        out = set()
-        for addr, state in self.connections.items():
-            if addr == exception: continue
-            out |= state.already_suggested
-        return out
-        
-    def schedule_for(self, address, n=10):
-        state = self.connections[address]
 
-        candidates = (
-            set(state.peer_has) -
-            state.already_suggested -
-            self.yet_to_schedule(exception=address)
+    
+    def yet_to_schedule(self) -> Set[int]:
+        """
+        Returns all the pieces not yet scheduled by any peerManager.
+        """
+        return set.union(
+            *[state.already_suggested for state in self.connections.values()]
         )
 
-        if len(candidates) == 0:
+    
+    def schedule_for(self, address, n=10):
+        """ 
+        Schedules pieces to requests for a peer, taking into accounts
+        the scheduled pieces for all other peers. 
+        """
+        state = self.connections[address]
+
+        candidates_pieces = (
+            state.not_yet_scheduled() -
+            self.yet_to_schedule()
+        )
+
+        if len(candidates_pieces) == 0:
             print("No candidates found...")
             return []
         
         chosen = random.sample(
-            list(candidates),
-            k = min(n, len(candidates))
+            list(candidates_pieces),
+            k = min(n, len(candidates_pieces))
         )
 
         state.already_suggested |= set(chosen) #union
         return chosen
-        
+
+    
     def receiver_loop(self):
         while True:
             mex = self.queue_in.get()
