@@ -37,7 +37,14 @@ class M_PEER_HAS(MasterMex):
     
 @dataclass
 class M_NEW_HAVE(MasterMex):
+    """ Master sends this to all the peers when it receives a new, completed block. """
     piece_index: int
+
+@dataclass
+class M_PEER_REQUEST(MasterMex):
+    """ Master sends this to all the peers when it receives a new, completed block. """
+    piece_index: int
+    sender: Tuple[str, int]
     
 @dataclass
 class M_PIECE(MasterMex):
@@ -48,11 +55,16 @@ class M_PIECE(MasterMex):
     sender: Tuple[str, int]
     # How many new pieces ought the master schedule for the PeerManager
     schedule_new_pieces: int = 1
-    
+
 @dataclass
 class M_DISCONNECTED(MasterMex):
     sender: Tuple[str, int]
 
+@dataclass
+class M_ERROR(MasterMex):
+    on_service: MasterMex = None
+    comment: str = None
+    
 @dataclass
 class M_DEBUG(MasterMex):
     data: Any

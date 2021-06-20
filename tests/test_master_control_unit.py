@@ -1,13 +1,13 @@
-
-import unittest
 from unittest.mock import Mock, MagicMock
 from queue import Queue
+from pathlib import * 
 
+import unittest
 import random
+import tempfile
 
 from Fiume.utils import *
 import Fiume.master as master
-
 
 def repeat(times):
     def repeatHelper(f):
@@ -20,22 +20,34 @@ def repeat(times):
     return repeatHelper
 
 
-class SinglePeer(unittest.TestCase):
+class PeerHasEverything(unittest.TestCase):
 
     def setUp(self):
+        piece_size = 256
+        piece_number = 100
+
+        self.file = tempfile.NamedTemporaryFile()
+        self.file.close()
+
+        self.metainfo = Mock(
+            piece_size=piece_size,
+            piece_number=piece_number,
+            download_fpath=Path(self.file.name)
+        )
+        
         self.peer  = Mock(address=("localhost", 50154), queue_in=Queue())
         self.peer2 = Mock(address=("localhost", 50155), queue_in=Queue())
         self.peer3 = Mock(address=("localhost", 50157), queue_in=Queue())
 
-        self.initial_bitmap = [False for _ in range(100)]
+        self.initial_bitmap = [False for _ in range(piece_number)]
         
-        self.mcu = master.MasterControlUnit(self.initial_bitmap)
+        self.mcu = master.MasterControlUnit(self.metainfo, self.initial_bitmap)
         self.mcu.main()
         self.mcu.add_connection_to(self.peer)
         
     def tearDown(self):
         self.mcu.queue_in.put(M_KILL())
-
+        
     def send_mcu(self, message):
         """ Helper """
         self.mcu.queue_in.put(message)
@@ -129,8 +141,6 @@ class SinglePeer(unittest.TestCase):
         p1_scheduled = self.peer.queue_in.get()
         p2_scheduled = self.peer2.queue_in.get()
 
-        print(p1_scheduled)
-        
         self.assertFalse(
             any(x in range(50, 60) for x in p2_scheduled.pieces_index),
             p2_scheduled.pieces_index
@@ -154,13 +164,12 @@ class SinglePeer(unittest.TestCase):
 
         
     def test_graceful_disconnection_of_peer(self):
-        print(self.mcu.already_scheduled())
-
+        """
+        When a peer gracefully disconnects, the scheduled pieces that it had
+        are redistributed to all the other pieces.
+        """
         # A peer reserves for itself all the pieces
         self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=100))
-
-        print(self.get_mex(self.peer))
-        print(self.mcu.already_scheduled())
 
         # A new peer tries to connect and ask for pieces, but
         # peer1 has already scheduled all the pieces; as a result,
@@ -212,4 +221,48 @@ class SinglePeer(unittest.TestCase):
             set(mex_peer2.pieces_index) | set(mex_peer3.pieces_index),
             set(range(99))
         )
-                            
+
+        
+    def test_block_request(self):
+        # A peer reserves for itself all the pieces
+        self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=10))       
+        scheduled = self.get_mex(self.peer).pieces_index
+        random_piece = random.choice(scheduled)
+
+
+        # A peer2 connects; it has no piece
+        self.mcu.add_connection_to(self.peer2)
+        self.send_mcu(M_PEER_HAS([], self.peer2.address))
+        self.assertEqual(
+            self.get_mex(self.peer2).pieces_index,
+            []
+        )
+
+        # Peer2 asks for a piece that the master doesn't have;
+        # an ERROR will be returned
+        impossible_request = M_PEER_REQUEST(random_piece, self.peer2.address)
+        self.send_mcu(impossible_request)
+        
+        error_p2 = self.get_mex(self.peer2)
+        self.assertIsInstance(error_p2, M_ERROR)
+        self.assertEqual(error_p2.on_service, impossible_request)
+
+        
+        # A piece arrives from peer1
+        self.send_mcu(M_PIECE(random_piece,
+                              b"1" * self.metainfo.piece_size,
+                              self.peer.address))
+        
+        self.send_mcu(
+            M_PEER_REQUEST(random_piece, self.peer2.address)
+        )
+
+        have_p2 = self.get_mex(self.peer2)
+        self.assertIsInstance(have_p2, M_NEW_HAVE)
+        self.assertEqual(have_p2.piece_index, random_piece)
+
+        
+        piece_p2 = self.get_mex(self.peer2)
+        self.assertIsInstance(piece_p2, M_PIECE)
+        self.assertEqual(piece_p2.piece_index, random_piece)
+        self.assertEqual(piece_p2.data, b"1" * self.metainfo.piece_size)

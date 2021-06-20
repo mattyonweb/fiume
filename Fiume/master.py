@@ -38,7 +38,8 @@ class ConnectionStatus:
 
         
 class MasterControlUnit:
-    def __init__(self, initial_bitmap):
+    def __init__(self, metainfo, initial_bitmap):
+        self.metainfo = metainfo
         self.bitmap: List[bool] = initial_bitmap
         self.connections = dict()
         self.queue_in = Queue()
@@ -135,8 +136,6 @@ class MasterControlUnit:
         """
         state = self.connections[address]
         redistrib_pieces = state.already_scheduled
-
-        print("AOOOOOOOOOOO", redistrib_pieces)
         
         # (piece_index da redistribuire) : (possibili peers che ce l'hanno) 
         table: Dict[int, List[Address]] = {
@@ -169,6 +168,24 @@ class MasterControlUnit:
         return new_assignments
 
     
+    def write_piece_to_file(self, piece_index: int, data: bytes):
+        if not self.metainfo.download_fpath.exists():
+            self.metainfo.download_fpath.touch()
+            
+        # TODO: mettere un lock qui
+        with open(self.metainfo.download_fpath, "r+b") as f:
+            # TODO: assert su lungehzza data
+            f.seek(piece_index * self.metainfo.piece_size)
+            f.write(data)
+
+    def read_piece_from_file(self, piece_index) -> bytes:
+        # TODO: mettere un lock qui?
+        with open(self.metainfo.download_fpath, "r+b") as f:
+            f.seek(piece_index * self.metainfo.piece_size)
+            return f.read(self.metainfo.piece_size)
+
+
+    
     def receiver_loop(self):
         while True:
             mex = self.queue_in.get()
@@ -186,12 +203,10 @@ class MasterControlUnit:
 
                 
             elif isinstance(mex, M_PIECE):
-                print("AAAAAAAAAAAAAAA", self.connections[mex.sender].already_scheduled)
                 status = self.connections[mex.sender]
                 status.completed_piece(mex.piece_index)
-                print("BBBBBBBBBBBBBBB", self.connections[mex.sender].already_scheduled)
 
-                                
+                self.write_piece_to_file(mex.piece_index, mex.data)
                 self.update_global_bitmap(mex.piece_index)                
                 self.send_to(mex.sender,
                              M_SCHEDULE(self.schedule_for(mex.sender, n=mex.schedule_new_pieces)))
@@ -205,7 +220,19 @@ class MasterControlUnit:
                 for peer_addr, new_scheduled in mapping.items():
                     self.connections[peer_addr].set_suggested(new_scheduled)                    
                     self.send_to(peer_addr, M_SCHEDULE(new_scheduled))
+
                     
+            elif isinstance(mex, M_PEER_REQUEST):
+                if not self.bitmap[mex.piece_index]:
+                    # print("Asking for a piece we don't yet have!")
+                    self.send_to(mex.sender, M_ERROR(mex, "We don't have requested piece"))
+                    continue
+                
+                data = self.read_piece_from_file(mex.piece_index)
+                self.send_to(mex.sender,
+                             M_PIECE(mex.piece_index, data, None, None))
+
+                
             elif isinstance(mex, M_KILL):
                 break
 
