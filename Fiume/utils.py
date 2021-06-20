@@ -9,6 +9,10 @@ from dataclasses import dataclass
 import enum
 import Fiume.config as config
 
+Address = Tuple[str, int]
+
+#######################################à
+
 class MasterMex:
     pass
 
@@ -46,14 +50,8 @@ class M_PIECE(MasterMex):
     schedule_new_pieces: int = 1
     
 @dataclass
-class M_DATA_BLOCK(MasterMex):
-    piece_index: int
-    data: bytes
-
-@dataclass
-class M_BITMAP(MasterMex):
+class M_DISCONNECTED(MasterMex):
     sender: Tuple[str, int]
-    bitmap: List[bool]
 
 @dataclass
 class M_DEBUG(MasterMex):

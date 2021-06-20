@@ -25,6 +25,7 @@ class SinglePeer(unittest.TestCase):
     def setUp(self):
         self.peer  = Mock(address=("localhost", 50154), queue_in=Queue())
         self.peer2 = Mock(address=("localhost", 50155), queue_in=Queue())
+        self.peer3 = Mock(address=("localhost", 50157), queue_in=Queue())
 
         self.initial_bitmap = [False for _ in range(100)]
         
@@ -38,7 +39,10 @@ class SinglePeer(unittest.TestCase):
     def send_mcu(self, message):
         """ Helper """
         self.mcu.queue_in.put(message)
-        
+
+    def get_mex(self, peer, timeout=1):
+        return peer.queue_in.get(timeout)
+    
     ##############################
     
     def test_when_i_have_nothing_and_peer_everything(self):
@@ -131,3 +135,81 @@ class SinglePeer(unittest.TestCase):
             any(x in range(50, 60) for x in p2_scheduled.pieces_index),
             p2_scheduled.pieces_index
         )
+
+        
+    def test_when_no_blocks_to_assign_assign_nothing(self):
+        self.send_mcu(M_PEER_HAS([0], self.peer.address, schedule_new_pieces=3))
+
+        scheduled = self.peer.queue_in.get().pieces_index[0]
+
+        self.assertEqual(scheduled, 0)
+
+        self.send_mcu(M_PIECE(0, b"", self.peer.address))
+
+        _ = self.peer.queue_in.get() # HAVE message
+
+        self.assertEqual(
+            self.peer.queue_in.get().pieces_index, []
+        )
+
+        
+    def test_graceful_disconnection_of_peer(self):
+        print(self.mcu.already_scheduled())
+
+        # A peer reserves for itself all the pieces
+        self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=100))
+
+        print(self.get_mex(self.peer))
+        print(self.mcu.already_scheduled())
+
+        # A new peer tries to connect and ask for pieces, but
+        # peer1 has already scheduled all the pieces; as a result,
+        # no piece is scheduled for peer2
+        self.mcu.add_connection_to(self.peer2)
+        self.send_mcu(M_PEER_HAS(list(range(100)), self.peer2.address))
+        self.assertEqual(
+            self.get_mex(self.peer2).pieces_index,
+            []
+        )
+
+        self.mcu.add_connection_to(self.peer3)
+        self.send_mcu(M_PEER_HAS(list(range(50)), self.peer3.address))
+        self.assertEqual(
+            self.get_mex(self.peer3).pieces_index,
+            []
+        )
+
+        # A new piece arrives from peer1
+        self.send_mcu(M_PIECE(99, b"", self.peer.address))
+
+        # But now, peer1 disconnects!
+        self.send_mcu(M_DISCONNECTED(self.peer.address))
+
+        # HAVE messages, who cares
+        _, _ = self.get_mex(self.peer2), self.get_mex(self.peer3)
+
+        # SCHEDULE messages
+        mex_peer2 = self.get_mex(self.peer2)
+        mex_peer3 = self.get_mex(self.peer3)
+
+        self.assertIsInstance(mex_peer3, M_SCHEDULE)
+        self.assertIsInstance(mex_peer3, M_SCHEDULE)
+
+        # No piece is scheduled to both the peers
+        self.assertEqual(
+            set(mex_peer2.pieces_index) & set(mex_peer3.pieces_index),
+            set()
+        )
+
+        # Peer 3, who has only pieces [0..50], is not scheduled a piece
+        # greater than 50
+        self.assertTrue(
+            all(x <= 50 for x in mex_peer3.pieces_index)
+        )
+
+        # All together, the two SCHEDULEs cover the scheduled pieces for P1
+        self.assertSetEqual(
+            set(mex_peer2.pieces_index) | set(mex_peer3.pieces_index),
+            set(range(99))
+        )
+                            

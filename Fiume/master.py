@@ -6,9 +6,9 @@ from Fiume.utils import *
 
 class ConnectionStatus:
     def __init__(self, peer):
-        self.queue_in = peer.queue_in
-        self.peer_has = set()
-        self.already_suggested = set()
+        self.queue_in: Queue    = peer.queue_in
+        self.peer_has: Set[int] = set()
+        self.already_scheduled: Set[int] = set()
 
         
     def update_peer_has(self, pieces: List[int]):
@@ -17,19 +17,29 @@ class ConnectionStatus:
         """
         self.peer_has |= set(pieces)
 
+    def set_suggested(self, pieces: List[int]):
+        self.already_scheduled |= set(pieces)
         
     def not_yet_scheduled(self) -> Set[int]:
         """
         Returns all the pieces that the peer has and that 
         were not already scheduled for request.
         """
-        return self.peer_has - self.already_suggested
-
+        return self.peer_has - self.already_scheduled
 
     
+    def completed_piece(self, piece_idx: int):
+        """ 
+        When we receive the full piece, remove it from the 
+        already_scheduled set.
+        """
+        self.already_scheduled -= {piece_idx}
+
+
+        
 class MasterControlUnit:
     def __init__(self, initial_bitmap):
-        self.bitmap = initial_bitmap
+        self.bitmap: List[bool] = initial_bitmap
         self.connections = dict()
         self.queue_in = Queue()
 
@@ -41,7 +51,7 @@ class MasterControlUnit:
         self.connections[peer.address] = ConnectionStatus(peer)
 
         
-    def send_to(self, address, mex):
+    def send_to(self, address: Address, mex: MasterMex):
         """ 
         Sends a message to a peer manager, through the appropriate queue.
         """
@@ -66,7 +76,7 @@ class MasterControlUnit:
         self.send_all(M_NEW_HAVE(new_piece))
 
 
-    def bitmap_to_set(self):
+    def bitmap_to_set(self) -> Set[int]:
         out = set()
         for i in range(len(self.bitmap)):
             if self.bitmap[i]:
@@ -74,25 +84,30 @@ class MasterControlUnit:
         return out
 
     
-    def yet_to_schedule(self) -> Set[int]:
+    def already_scheduled(self) -> Set[int]:
         """
-        Returns all the pieces not yet scheduled by any peerManager.
+        Returns all the pieces already scheduled by any peerManager.
         """
         return set.union(
-            *[state.already_suggested for state in self.connections.values()]
+            *[state.already_scheduled for state in self.connections.values()]
         )
 
     
-    def schedule_for(self, address, n=10):
+    def schedule_for(self, address: Address, n=10) -> List[int]:
         """ 
         Schedules pieces to requests for a peer, taking into accounts
         the scheduled pieces for all other peers. 
         """
         state = self.connections[address]
 
+        # Candidates pieces for peer P are those that:
+        # 1. P owns
+        # 2. Were not already assigned to PeerManager for P
+        # 3. Were not already assigned to /any/ peerManager
         candidates_pieces = (
             state.not_yet_scheduled() -
-            self.yet_to_schedule()
+            self.already_scheduled() -
+            self.bitmap_to_set()
         )
 
         if len(candidates_pieces) == 0:
@@ -104,8 +119,54 @@ class MasterControlUnit:
             k = min(n, len(candidates_pieces))
         )
 
-        state.already_suggested |= set(chosen) #union
+        state.set_suggested(chosen)
+        
         return chosen
+
+
+    def redistribute_pieces_of(self, address: Address) -> Dict[Address, List[int]]:
+        """
+        The goal is to redistribute the already scheduled pieces of
+        peer P to all the other peers.
+        
+        We build a table of possible peers to which redistribute 
+        the pieces; if more than one choice is possible, simply choose
+        randomly.
+        """
+        state = self.connections[address]
+        redistrib_pieces = state.already_scheduled
+
+        print("AOOOOOOOOOOO", redistrib_pieces)
+        
+        # (piece_index da redistribuire) : (possibili peers che ce l'hanno) 
+        table: Dict[int, List[Address]] = {
+            p : [] for p in redistrib_pieces
+        }
+        
+        for peer, p_state in self.connections.items():
+            if peer == address:
+                continue
+            
+            for common_piece in (p_state.peer_has & redistrib_pieces):
+                table[common_piece].append(peer)
+
+                
+        new_assignments: Dict[Address, List[int]] = dict()
+        
+        for piece, candidate_peers in table.items():
+            if candidate_peers == []:
+                continue
+            
+            if len(candidate_peers) == 1:
+                candidate = candidate_peers[0]
+            else:
+                candidate = random.choice(candidate_peers)
+
+            new_assignments[candidate] = (
+                new_assignments.get(candidate, []) + [piece]
+            )
+
+        return new_assignments
 
     
     def receiver_loop(self):
@@ -117,24 +178,34 @@ class MasterControlUnit:
             if isinstance(mex, M_PEER_HAS):
                 status = self.connections[mex.sender]
                 status.update_peer_has(mex.pieces_index)
-                
-                # answer = M_SCHEDULE(status.schedule_suggestions(n=mex.schedule_new_pieces))
+
                 answer = M_SCHEDULE(
                     self.schedule_for(mex.sender, n=mex.schedule_new_pieces)
                 )
                 self.send_to(mex.sender, answer)
 
                 
-            if isinstance(mex, M_PIECE):
+            elif isinstance(mex, M_PIECE):
+                print("AAAAAAAAAAAAAAA", self.connections[mex.sender].already_scheduled)
                 status = self.connections[mex.sender]
-                
-                self.update_global_bitmap(mex.piece_index)
+                status.completed_piece(mex.piece_index)
+                print("BBBBBBBBBBBBBBB", self.connections[mex.sender].already_scheduled)
+
+                                
+                self.update_global_bitmap(mex.piece_index)                
                 self.send_to(mex.sender,
                              M_SCHEDULE(self.schedule_for(mex.sender, n=mex.schedule_new_pieces)))
 
-                # self.send_to(mex.sender,
-                #              M_SCHEDULE(status.schedule_suggestions(n=mex.schedule_new_pieces)))
                 
+            elif isinstance(mex, M_DISCONNECTED):
+                mapping = self.redistribute_pieces_of(mex.sender)
+                self.send_to(mex.sender, M_KILL())
+                del self.connections[mex.sender]
+
+                for peer_addr, new_scheduled in mapping.items():
+                    self.connections[peer_addr].set_suggested(new_scheduled)                    
+                    self.send_to(peer_addr, M_SCHEDULE(new_scheduled))
+                    
             elif isinstance(mex, M_KILL):
                 break
 
