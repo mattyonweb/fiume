@@ -41,9 +41,10 @@ class MasterControlUnit:
     def __init__(self, metainfo, initial_bitmap):
         self.metainfo = metainfo
         self.bitmap: List[bool] = initial_bitmap
-        self.connections = dict()
+        self.connections: Dict[Address, ConnectionStatus] = dict()
         self.queue_in = Queue()
 
+        self.lock_download_file = threading.Lock()
         
     def add_connection_to(self, peer):
         """
@@ -112,7 +113,7 @@ class MasterControlUnit:
         )
 
         if len(candidates_pieces) == 0:
-            print("No candidates found...")
+            # print("No candidates found...")
             return []
         
         chosen = random.sample(
@@ -169,20 +170,30 @@ class MasterControlUnit:
 
     
     def write_piece_to_file(self, piece_index: int, data: bytes):
-        if not self.metainfo.download_fpath.exists():
-            self.metainfo.download_fpath.touch()
-            
-        # TODO: mettere un lock qui
-        with open(self.metainfo.download_fpath, "r+b") as f:
-            # TODO: assert su lungehzza data
-            f.seek(piece_index * self.metainfo.piece_size)
-            f.write(data)
+        """
+        Writes an entire piece, received from a peer, to the downloaded
+        file. 
+        """
+        with self.lock_download_file:
 
+            if not self.metainfo.download_fpath.exists():
+                self.metainfo.download_fpath.touch()
+
+            with open(self.metainfo.download_fpath, "r+b") as f:
+                # TODO: assert su lungehzza data
+                f.seek(piece_index * self.metainfo.piece_size)
+                f.write(data)
+
+                
     def read_piece_from_file(self, piece_index) -> bytes:
-        # TODO: mettere un lock qui?
-        with open(self.metainfo.download_fpath, "r+b") as f:
-            f.seek(piece_index * self.metainfo.piece_size)
-            return f.read(self.metainfo.piece_size)
+        """
+        Reads an entire piece from the downloaded file.
+        """
+        with self.lock_download_file:
+
+            with open(self.metainfo.download_fpath, "r+b") as f:
+                f.seek(piece_index * self.metainfo.piece_size)
+                return f.read(self.metainfo.piece_size)
 
 
     
@@ -211,6 +222,9 @@ class MasterControlUnit:
                 self.send_to(mex.sender,
                              M_SCHEDULE(self.schedule_for(mex.sender, n=mex.schedule_new_pieces)))
 
+                if all(self.bitmap):
+                    self.send_all(M_KILL(reason="completed"))
+                    break
                 
             elif isinstance(mex, M_DISCONNECTED):
                 mapping = self.redistribute_pieces_of(mex.sender)

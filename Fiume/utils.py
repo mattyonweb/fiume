@@ -18,7 +18,7 @@ class MasterMex:
 
 @dataclass
 class M_KILL(MasterMex):
-    pass
+    reason: str = ""
 
 @dataclass
 class M_SCHEDULE(MasterMex):

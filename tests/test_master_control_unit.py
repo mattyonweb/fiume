@@ -224,11 +224,13 @@ class PeerHasEverything(unittest.TestCase):
 
         
     def test_block_request(self):
-        # A peer reserves for itself all the pieces
+        """ 
+        Tests peer's requests for blocks.
+        """
+
         self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=10))       
         scheduled = self.get_mex(self.peer).pieces_index
         random_piece = random.choice(scheduled)
-
 
         # A peer2 connects; it has no piece
         self.mcu.add_connection_to(self.peer2)
@@ -266,3 +268,22 @@ class PeerHasEverything(unittest.TestCase):
         self.assertIsInstance(piece_p2, M_PIECE)
         self.assertEqual(piece_p2.piece_index, random_piece)
         self.assertEqual(piece_p2.data, b"1" * self.metainfo.piece_size)
+
+        
+    def test_completed(self):
+        """ 
+        When download is completed, master sends kill to all peers.
+        """
+        self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=100))       
+        self.get_mex(self.peer)
+
+        for i in range(100):
+            self.send_mcu(M_PIECE(i, bytes([i]), self.peer.address, schedule_new_pieces=0))
+            have     = self.get_mex(self.peer) # scarta messaggio di risposta
+            schedule = self.get_mex(self.peer)
+            
+        kill = self.get_mex(self.peer, timeout=1)
+        self.assertIsInstance(kill, M_KILL)
+        self.assertEqual(kill.reason, "completed")
+
+    # def test_completed_but_exists_peer_
