@@ -222,9 +222,12 @@ class MasterControlUnit:
                 self.send_to(mex.sender,
                              M_SCHEDULE(self.schedule_for(mex.sender, n=mex.schedule_new_pieces)))
 
+                # When completed (= we have all the pieces), inform all peers that we
+                # have completed the download. The peers will decide if mantaining the
+                # connection and seed, or to disconnect
                 if all(self.bitmap):
-                    self.send_all(M_KILL(reason="completed"))
-                    break
+                    self.send_all(M_DEBUG("completed"))
+
                 
             elif isinstance(mex, M_DISCONNECTED):
                 mapping = self.redistribute_pieces_of(mex.sender)
@@ -248,6 +251,7 @@ class MasterControlUnit:
 
                 
             elif isinstance(mex, M_KILL):
+                # Only debug, or user input
                 break
 
 

@@ -282,8 +282,43 @@ class PeerHasEverything(unittest.TestCase):
             have     = self.get_mex(self.peer) # scarta messaggio di risposta
             schedule = self.get_mex(self.peer)
             
-        kill = self.get_mex(self.peer, timeout=1)
-        self.assertIsInstance(kill, M_KILL)
-        self.assertEqual(kill.reason, "completed")
+        completed = self.get_mex(self.peer, timeout=1)
+        self.assertIsInstance(completed, M_DEBUG)
+        self.assertEqual(completed.data, "completed")
 
-    # def test_completed_but_exists_peer_
+        
+    def test_completed_but_exists_peer_with_missing_pieces(self):
+        """ 
+        When we complete, other peers should still be able to
+        request pieces.
+        """
+        self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=100))       
+        self.get_mex(self.peer)
+
+        self.mcu.add_connection_to(self.peer2)
+        self.send_mcu(M_PEER_HAS(list(range(25)), self.peer2.address))
+        self.assertEqual(
+            self.get_mex(self.peer2).pieces_index,
+            []
+        )
+        
+        for i in range(100):
+            self.send_mcu(
+                M_PIECE(i,
+                        bytes([i]) * self.metainfo.piece_size,
+                        self.peer.address, schedule_new_pieces=0)
+            )
+            have     = self.get_mex(self.peer) # scarta messaggio di risposta
+            schedule = self.get_mex(self.peer)
+
+        for _ in range(100):
+            self.get_mex(self.peer2) # HAVE messages
+
+        self.send_mcu(M_PEER_REQUEST(99, self.peer2.address))
+        m = self.get_mex(self.peer2)
+        self.assertIsInstance(m, M_DEBUG)
+        self.assertEqual(m.data, "completed")
+        
+        m = self.get_mex(self.peer2)
+        self.assertIsInstance(m, M_PIECE)
+        self.assertEqual(m.data, bytes([99]) * self.metainfo.piece_size)
