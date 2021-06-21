@@ -8,13 +8,14 @@ import os
 import random
 import pathlib 
 
+from hashlib import sha1
 from queue import Queue
 from typing.io import *
 from typing import *
 
 import Fiume.config as config
 import Fiume.utils as utils
-
+import Fiume.master as master
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -96,6 +97,9 @@ class PeerManager:
         self.my_progresses: Dict[int, Tuple[int, int]] = dict()
         self.peer_progresses: Dict[int, Tuple[int, int]] = dict()
 
+        self.cache_pieces = dict()
+        self.deferred_peer_requests = dict()
+        
         self.max_concurrent_pieces = 4
         
         self.old_messages: List[Tuple[str, bytes]] = list()
@@ -124,17 +128,21 @@ class PeerManager:
         
     def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
         """
-        Reads data at a given offset from the downloaded file. Used when peer
+        Reads data at a given offset from the cache. Used when peer
         asks me for a piece.
+
+        If piece is not in cache, raise an exception (it should never happen! 
+        every time you call read_data, data must be entered in cache!)
         """
         if piece_length == 0:
             piece_length = self.get_piece_size(piece_index)
 
-        with open(self.out_fpath, "rb") as file:
-            file.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
-            data = file.read(piece_length)
+        if piece_index not in self.cache_pieces:
+            breakpoint()
+            raise Exception(f"Don't have piece {piece_index} in cache!")
 
-        return data
+        piece = self.cache_pieces[piece_index]
+        return piece[piece_offset:piece_offset+piece_length]
 
     
     def write_data(self, piece_index, piece_offset, payload):
@@ -311,16 +319,37 @@ class PeerManager:
         if isinstance(mex, utils.M_KILL):
             self.logger.debug("Received KILL from master")
             self.send_to_master(utils.M_DEBUG("Got KILLED"))
-            pass
+            return
         
         elif isinstance(mex, utils.M_DEBUG):
             self.logger.debug("Received DEBUG message from master: %s", mex.data)
             self.send_to_master(utils.M_DEBUG("Got DEBUGGED"))
+            return
 
-        elif isinstance(mex, utils.M_SCHEDULE):
-            self.pending += mex.pieces_index
-            self.ask_for_new_pieces() # TODO?
-            
+        # M_Piece has a bit complicated workflow.
+        # If we receive a M_PIECE, it means that in the past we requested to the
+        # master, on behalf of the peer, a piece N.
+        # We put the entire piece N in a cache.
+        # Then we resume the deferred request, 
+        elif isinstance(mex, utils.M_PIECE):
+            self.cache_pieces[mex.piece_index] = mex.data
+
+            if mex.piece_index not in self.deferred_peer_requests:
+                # Should not happend
+                self.logger.warning(
+                    "Received piece %d from master, but we never deferred its sending!",
+                    mex.piece_index
+                )
+                return
+
+            # Resume request worfflow
+            return self.manage_request(
+                mex.piece_index,
+                *self.deferred_peer_requests[mex.piece_index],
+                deferred=True #important!
+            )
+                
+        
         
         
     def send_message(self, mexType: MexType, **kwargs):
@@ -407,7 +436,13 @@ class PeerManager:
             if not m and p:
                 self.am_interested_in.append(i)
                 
-        self.send_to_master(utils.M_PEER_HAS(self.am_interested_in, self.address))
+        self.send_to_master(
+            utils.M_PEER_HAS(
+                self.am_interested_in,
+                self.address,
+                1                
+            )
+        )
         
         # Se, dal confronto fra la mia e l'altrui bitmap, scopro
         # che non mi interessa nulla di ciò che ha il peer, informalo che
@@ -558,18 +593,15 @@ class PeerManager:
     def manage_received_have(self, piece_index: int):
         self.logger.debug("Acknowledging that peer has new piece %d", piece_index)
         self.peer_bitmap[piece_index] = True
-        # TODO informa master
-
+        self.send_to_master(
+            utils.M_PEER_HAS([piece_index], self.address, n=1)
+        )
         
     def manage_received_piece(self, piece_index, piece_offset, piece_payload):
         if self.my_bitmap[piece_index]:
             self.logger.warning(
                 "Received fragment of piece %d offset %d, but I have piece it already (len: %d)",
                 piece_index, piece_offset, len(piece_payload)
-            )
-            assert (
-                self.read_data(piece_index, piece_offset, len(piece_payload)) ==
-                piece_payload
             )
             return
 
@@ -611,19 +643,15 @@ class PeerManager:
 
 
         
-    def manage_request(self, p_index, p_offset, p_length):
+    def manage_request(self, p_index, p_offset, p_length, deferred=False):
         """ Responds to a REQUEST message from the peer. """
         if self.am_choking:
             self.logger.warning("Received REQUEST but am choking.")
             return
 
-        self.logger.debug("Received REQUEST for piece %d offset %d length %d: will send %s...%s",
-                          p_index, p_offset, p_length,
-                          # TODO: bug se p_length < 4 (IRL non succederà mai)
-                          self.read_data(p_index, p_offset, 4),
-                          self.read_data(p_index, p_offset, 4))
-        
-        # self.logger.debug("Received REQUEST for piece %d starting from %d", p_index, p_offset)
+        log_str = "Resuming deferred " if deferred else "Received "
+        self.logger.debug(s + "REQUEST for piece %d offset %d length %d: will send %s...%s",
+                          p_index, p_offset, p_length)
 
         if not self.peer_interested:
             self.logger.warning("Was asked for piece %d, but to me peer is not interested", p_index)
@@ -640,6 +668,31 @@ class PeerManager:
             breakpoint()
             return
 
+        # 1. Controlla se il pezzo è in cache_pieces
+        # 2. Se sì, fai come al solito ma leggendo dalla cache_pieces
+        # 3. Se no, chiedi pezzo al master; archivia il messaggio di REQUEST
+        # in self.deferred_requests, quindi quando dal master arriva un messaggio
+        # M_PIECE, finalmente rispondi al Peer
+
+        if not p_index in self.cache_pieces:
+            self.send_to_master(
+                utils.M_PEER_REQUEST(p_index, self.address)
+            )
+            self.deferred_peer_requests[p_index] = (p_offset, p_length)
+            self.debug("Deferred response to REQUEST piece %d", p_index)
+            return
+
+        if deferred:
+            offs, length = self.deferred_peer_requests[p_index]
+            if offs != p_offset or length != p_length:
+                self.logger.error("Resuming deferred piece %d, but couldn't find deferred request!",
+                                  p_index)
+                breakpoint()
+                raise Exception("Deferentiationalitation error")
+
+            del self.deferred_peer_requests[p_index]
+            
+                
         self.send_message(
             MexType.PIECE,
             piece_index=p_index,
@@ -647,7 +700,9 @@ class PeerManager:
             piece_length=p_length
         )
 
+        
         # TODO: revisione di queste due righe
+        # TODO: rendile una funzione, da chiamare ad ogni invio di piece
         if p_index in self.peer_progresses:
             (old_partial, old_total) = self.peer_progresses[p_index]
         else:
@@ -673,15 +728,10 @@ class PeerManager:
             # TODO: esci 
 
         
-    def verify_hash(self, piece_index):
-        return True # BUG # TODO
-        import hashlib
+    def verify_hash(self, piece_index: int, data: bytes):
+        sha = sha1(data)
 
-        sha = hashlib.sha1()
-        sha.update(self.read_data(piece_index))
-        calculated_hash = sha.digest()
-
-        are_equal = calculated_hash == self.metainfo.pieces_hash[piece_index]
+        are_equal = sha == self.metainfo.pieces_hash[piece_index]
 
         if are_equal:
             self.logger.debug("Calculated hash for piece %d matches with metainfo", piece_index)
@@ -690,16 +740,10 @@ class PeerManager:
             breakpoint()
 
         return are_equal
-            
-#################################ÀÀ
 
-class ConnectionStatus:
-    def __init__(self, address, queue_to):
-        self.address = address
-        self.peer_has = list()
-        self.assigned = list()
-        self.queue = queue_to
-        
+
+#################################ÀÀ
+       
 # Questo oggetto gestisce le connessioni entrambi.
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
@@ -730,27 +774,29 @@ class ThreadedServer:
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
         # creata ad hoc.
+        # TODO: serve davvero, qui?
         self.global_bitmap: List[bool] = utils.data_to_bitmap(
             self.options["output_file"],
             num_pieces=self.metainfo.num_pieces
         )
         
         self.max_peer_connections = 1
-        self.active_connections = dict()
-        self.queue_master_in = Queue()
+        self.active_connections = set()
+        
+        self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap)
+        self.master_queue = self.mcu.get_master_queue()
+
 
         
-    def main(self):        
-        master_listen_t = threading.Thread(target=self.master_queue_receiver)
-        master_listen_t.start()
-        
+    def main(self):       
         socket_listen_t = threading.Thread(target=self.listen)
         socket_listen_t.start()        
 
         i = 0
         while i < self.max_peer_connections:
             ip, port = random.choice(self.peers)
-
+            self.logger.debug("Chosen peer: %s:%s", ip, port)
+            
             if (ip, port) in self.active_connections:
                 self.logger.warning("Chosen an already connected peer")
                 time.sleep(1)
@@ -762,64 +808,18 @@ class ThreadedServer:
                 continue
 
             try:
-                q_to = Queue()
+                queues = (Queue(), self.master_queue)
+                peer_manager = self.connect_as_client(ip, port, queues)
+                self.active_connections.add((ip, port))
+                self.mcu.add_connection_to(peer_manager)
 
-                connection = ConnectionStatus((ip, port), q_to)
-                self.active_connections[(ip, port)] = connection
-                self.connect_as_client(ip, port, (q_to, self.queue_master_in))
                 i += 1
                 
             except Exception as e:
-                self.logger.debug("%s", e)
+                self.logger.error("%s", e)
                 time.sleep(2)
                 continue
-
-        
-    def master_queue_receiver(self):
-        """ 
-        Infinite loop for handling messages coming from PeerManagers.
-        """
-        
-        while True:
-            mex = self.queue_master_in.get()
-
-            if isinstance(mex, utils.M_DEBUG):
-                self.logger.debug("%s", mex.data)
-
-            elif isinstance(mex, utils.M_PEER_HAS):
-                state = self.active_connections[mex.sender]
-
-                # Aggiorna stato connessione, il peer ha un nuovo pezzo
-                state.peer_has += mex.pieces_index
-
-                schedule_pieces = self.assign_pieces(mex.sender)
-
-                state.queue.put(utils.M_SCHEDULE(schedule_pieces))
-
-            elif isinstance(mex, utils.M_PIECE):
-                state = self.active_connections[mex.sender]
-                state.peer_has.remove(mex.piece_index)
-                
-            else:
-                self.logger.warning("Message not implemented: %s", mex)
-
-                
-    def assign_pieces(self, address:Tuple[str, int]):
-        """ 
-        Choose which pieces to assign a peer. The peer will receive these pieces,
-        and proceeds to download them.
-        """
-        
-        # queue_out  = self.active_connections[address]
-        # assignable = set(range(self.metainfo.num_pieces)) - set(self.assigned_pieces[address])
-        # to_assign  = random.sample(list(assignable),
-        #                            k=min(10, len(assignable)))
-        # queue_out.put(utils.M_SCHEDULE(to_assign))
-
-        # Ritorna tutti i pezzi che il peer ha ma noi no
-        return self.active_connections[address].peer_has
-        
-    ##############################
+            
     
     def listen(self):
         self.logger.debug("Started listening on %s", (self.host, self.port))
@@ -836,13 +836,14 @@ class ThreadedServer:
                 (client_socket, address),
                 self.metainfo,
                 self.tracker_manager,
-                (None, None), #TODO queues
+                (Queue(), self.master_queue),
                 self.global_bitmap,
                 self.options,
                 Initiator.OTHER
             )
 
-            self.peer = newPeer
+            self.active_connections.add((ip, port))
+            self.mcu.add_connection_to(newPeer)
             
             t = threading.Thread(target = newPeer.main)
             t.start()

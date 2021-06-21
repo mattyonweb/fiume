@@ -183,20 +183,6 @@ class MasterControlUnit:
         return new_assignments
 
     
-    # def verify_hash(self, piece_index: int, data: bytes) -> bool:
-    #     calculated_hash = sha1(data)
-
-    #     are_equal = calculated_hash == self.metainfo.pieces_hash[piece_index]
-
-    #     if are_equal:
-    #         self.logger.debug("Calculated hash for piece %d matches with metainfo", piece_index)
-    #     else:
-    #         self.logger.error("Hashes for piece %d DO NOT MATCH!", piece_index)
-    #         breakpoint()
-
-    #     return are_equal
-
-    
     def write_piece_to_file(self, piece_index: int, data: bytes):
         """
         Writes an entire piece, received from a peer, to the downloaded
