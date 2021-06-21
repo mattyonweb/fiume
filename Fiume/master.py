@@ -81,16 +81,16 @@ class MasterControlUnit:
         self.connections[address].queue_in.put(mex)
 
         
-    def send_all(self, mex, exclude=lambda x: False):
+    def send_all(self, mex, exclude: Address=None):
         """
         Sends a message to every connected peer.
         """
         for p in self.connections:
-            if not exclude(p):
+            if p != exclude:
                 self.send_to(p, mex)
 
                 
-    def update_global_bitmap(self, new_piece: int):
+    def update_global_bitmap(self, new_piece: int, peer_from: Address):
         """
         When receiving PIECE message, updates the global bitmap.
         Must also inform all peers of this update!
@@ -98,11 +98,12 @@ class MasterControlUnit:
         self.bitmap[new_piece] = True
 
         update_bitmap_file( # in utils.py
-            self.options["download_fpath"],
+            # self.options["output_file"],
+            self.metainfo.download_fpath,
             self.bitmap
         )
 
-        self.send_all(M_NEW_HAVE(new_piece))
+        self.send_all(M_NEW_HAVE(new_piece), peer_from)
         
 
     def bitmap_to_set(self) -> Set[int]:
@@ -251,7 +252,7 @@ class MasterControlUnit:
                 status.completed_piece(mex.piece_index)
 
                 self.write_piece_to_file(mex.piece_index, mex.data)
-                self.update_global_bitmap(mex.piece_index)                
+                self.update_global_bitmap(mex.piece_index, mex.sender)                
                 self.send_to(mex.sender,
                              M_SCHEDULE(self.schedule_for(mex.sender, n=mex.schedule_new_pieces)))
 
@@ -261,7 +262,8 @@ class MasterControlUnit:
                 if all(self.bitmap):
                     self.send_all(M_DEBUG("completed", None))
                     print("Completed download!")
-                
+
+                    
             elif isinstance(mex, M_DISCONNECTED):
                 mapping = self.redistribute_pieces_of(mex.sender)
                 self.send_to(mex.sender, M_KILL())

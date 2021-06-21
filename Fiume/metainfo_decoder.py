@@ -43,7 +43,8 @@ class MetaInfo(dict):
         self.total_size: int = self[b"info"][b"length"]
         self.num_pieces: int = len(self.pieces_hash)
 
-        
+        self.download_fpath: Path = self["output_file"]
+                
     def __gather_trackers(self) -> List[Url]:
         """ Unites all possible trackers in a single list, useless """
         trackers = [self[b"announce"]]

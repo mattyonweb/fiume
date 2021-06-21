@@ -257,8 +257,6 @@ class PeerManager:
 
             # Messagi di controllo (ie. da Master) vengono intoltrati a questa funzione
             if isinstance(mex, utils.MasterMex):
-                print("PORCODIOOOOOOOOOOO")
-                print(mex)
                 self.control_message_interpreter(mex)
                 continue
 
@@ -326,37 +324,37 @@ class PeerManager:
 
             
     def control_message_interpreter(self, mex: utils.MasterMex):
-        self.logger.debug("Received message %s", str(mex))
+        self.logger.debug("[MASTER] Received message %s", str(mex))
         
         if isinstance(mex, utils.M_KILL):
-            self.logger.debug("Received KILL from master")
+            self.logger.debug("[MASTER] Received KILL from master")
             self.send_to_master(utils.M_DEBUG("Got KILLED", self.address))
             return # TODO
         
         elif isinstance(mex, utils.M_DEBUG):
-            self.logger.debug("Received DEBUG message from master: %s", mex.data)
+            self.logger.debug("[MASTER] Received DEBUG message from master: %s", mex.data)
             self.send_to_master(utils.M_DEBUG("Got DEBUGGED", self.address))
             return
         
         elif isinstance(mex, utils.M_OUR_BITMAP):
-            self.logger.debug("Received OUR_BITMAP message from master")
+            self.logger.debug("[MASTER] Received OUR_BITMAP message from master")
             self.my_bitmap = mex.bitmap
             return
             
         elif isinstance(mex, utils.M_SCHEDULE):
-            self.logger.debug("Received SCHEDULE message from master: %s", mex.pieces_index)
+            self.logger.debug("[MASTER] Received SCHEDULE message from master: %s", mex.pieces_index)
             self.scheduled += mex.pieces_index
             # Avoids deadlock:
             # if no pieces are currently downloaded, try_ask_for_piece will
             # start downloading the received piece(s);
             # if we were downloading pieces already, simply start one of the
             # new pieces (if we are not > max_concurrent_pieces
-            self.try_ask_for_piece()
+            self.ask_for_new_pieces()
             return
 
         
         elif isinstance(mex, utils.M_NEW_HAVE):
-            self.logger.debug("Received NEW_HAVE message from master: %s", mex.piece_index)
+            self.logger.debug("[MASTER] Received NEW_HAVE message from master: %s", mex.piece_index)
             self.my_bitmap[mex.piece_index] = True
             return        
 
@@ -488,7 +486,7 @@ class PeerManager:
             if not m and p:
                 self.am_interested_in.append(i)
 
-        self.logger.debug("Sending M_PEER_HAS to master: %s", self.am_interested_in)
+        self.logger.debug("[MASTER] Sending M_PEER_HAS to master: %s", self.am_interested_in)
         # Informs master of peer's bitmap
         self.send_to_master(
             utils.M_PEER_HAS(
@@ -549,7 +547,7 @@ class PeerManager:
         Low-level routine that sends the request for a piece to the peer.
         """
         self.logger.debug("Asking for new piece, number %d", piece_idx)
-
+            
         piece_length = min(
             self.metainfo.block_size,
             self.get_piece_size(piece_idx)
@@ -608,6 +606,11 @@ class PeerManager:
             self.logger.debug("Already downloading at the fullest")
             return
 
+        if not self.am_interested:
+            self.logger.warning("Want to ask piece %d, but not interested; sending INTERESTED")
+            self.am_interested = True
+            self.send_message(MexType.INTERESTED)
+            
         random_piece = random.sample(
             list(not_yet_started), #non si può fare random choice su set()
             k=min(self.max_concurrent_pieces - len(self.my_progresses),
@@ -632,7 +635,12 @@ class PeerManager:
         if len(self.my_progresses) >= self.max_concurrent_pieces:
             self.logger.debug("Already topping max concurrent requests")
             return
-        
+
+        if not self.am_interested:
+            self.logger.warning("Want to ask piece %d, but not interested; sending INTERESTED")
+            self.am_interested = True
+            self.send_message(MexType.INTERESTED)
+            
         if suggestion is not None:
             piece_idx = suggestion
         else:
@@ -653,6 +661,11 @@ class PeerManager:
     def manage_received_have(self, piece_index: int):
         self.logger.debug("Acknowledging that peer has new piece %d", piece_index)
         self.peer_bitmap[piece_index] = True
+        self.logger.debug(
+            "[MASTER] Sending M_PEER_HAS %d to master, ask schedule %d pieces",
+            piece_index, 1
+        )
+        
         self.send_to_master(
             utils.M_PEER_HAS(
                 [piece_index],
@@ -686,16 +699,17 @@ class PeerManager:
             if not self.verify_hash(piece_index, new_data):
                 raise Exception("Hashes not matching") #TODO
 
+            self.logger.debug("Sending HAVE for piece %d to peer", piece_index)
+            self.send_message(MexType.HAVE, piece_index=piece_index)
+            
             self.logger.debug("Setting my bitfield for piece %d as PRESENT", piece_index)
             self.update_my_bitmap(piece_index, True)
             self.am_interested_in.remove(piece_index)
 
             # M_PIECE richiede anche un nuovo pezzo al Master
             self.scheduled.remove(piece_index)
+            self.logger.debug("[MASTER] Sending M_PIECE for %d", piece_index)
             self.send_to_master(utils.M_PIECE(piece_index, new_data, self.address))
-            
-            self.logger.debug("Sending HAVE for piece %d", piece_index)
-            self.send_message(MexType.HAVE, piece_index=piece_index)
 
             # Finito un pezzo, iniziane uno NUOVO
             self.ask_for_new_pieces()
@@ -738,11 +752,11 @@ class PeerManager:
         # M_PIECE, finalmente rispondi al Peer
 
         if not p_index in self.cache_pieces:
+            self.debug("[MASTER] Deferred response to REQUEST piece %d", p_index)
             self.send_to_master(
                 utils.M_PEER_REQUEST(p_index, self.address)
             )
             self.deferred_peer_requests[p_index] = (p_offset, p_length)
-            self.debug("Deferred response to REQUEST piece %d", p_index)
             return
 
         if deferred:
@@ -832,7 +846,8 @@ class ThreadedServer:
         self.logger.debug("Self port: %d", self.port)
 
         self.options = options
-        self.peers = self.tracker_manager.notify_start()
+        # self.peers = self.tracker_manager.notify_start()
+        self.peers = [('78.14.24.41', 50144)]
 
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
@@ -949,8 +964,10 @@ options = {
 }
 
 with open(options["torrent_path"], "rb") as f:
-    metainfo = md.MetaInfo(bencodepy.decode(f.read()))
-
+    metainfo = md.MetaInfo(
+        bencodepy.decode(f.read()) | options
+    )
+    
 tm = md.TrackerManager(metainfo, options)
 
 t = ThreadedServer(
