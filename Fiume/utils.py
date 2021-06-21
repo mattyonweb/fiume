@@ -18,48 +18,91 @@ class MasterMex:
 
 @dataclass
 class M_KILL(MasterMex):
+    """ 
+    - Master -> PM: PM must close the connection.
+    - ? -> Master: Master must close (only debug or user request)
+    """  
     reason: str = ""
 
 @dataclass
 class M_SCHEDULE(MasterMex):
+    """
+    Master -> PM. 
+    
+    Assigns a list of pieces to the PM, who will be the only PM 
+    authorized to request and download them.
+    """
     pieces_index: List[int]
 
 @dataclass
 class M_DESCHEDULE(MasterMex):
     pieces_index: List[int]
 
+    
 @dataclass
 class M_PEER_HAS(MasterMex):
+    """
+    PM -> Master.
+
+    Used at the beginning of a connections, as a BITFIELD message.
+    Informs the master about the pieces that the peer has.
+    Master answers by scheduling (a max. of) N pieces to that peer.
+    """
     pieces_index: List[int]
     sender: Tuple[str, int]
     # How many new pieces ought the master schedule for the PeerManager, if any
     schedule_new_pieces: int = 10
+
     
 @dataclass
 class M_NEW_HAVE(MasterMex):
-    """ Master sends this to all the peers when it receives a new, completed block. """
+    """ 
+    Master -> PMs.
+    Master sends this to all the peers when it receives a new, completed block.
+    Used to update peers bitmaps, keeping it synchronized with master's.
+    """
     piece_index: int
+
 
 @dataclass
 class M_PEER_REQUEST(MasterMex):
-    """ Master sends this to all the peers when it receives a new, completed block. """
+    """ 
+    PM -> Master.
+
+    When a peer requests a piece, PM sends to Master this message. 
+    Master's answer will be a M_PIECE.
+    """
     piece_index: int
     sender: Tuple[str, int]
+
     
 @dataclass
 class M_PIECE(MasterMex):
-    """ When client finishes downloading a piece, then it sends this message
-    to the master, who will proceed to write it to file. """
+    """ 
+    PM -> Master or Master -> PM.
+
+    When a PM finishes downloading a piece, it sends this message to the
+    master, who will proceed to write it to file. 
+    
+    This message is also used when the Master answers to a M_PEER_REQUEST.
+    """
     piece_index: int
     data: bytes
     sender: Tuple[str, int]
     # How many new pieces ought the master schedule for the PeerManager
     schedule_new_pieces: int = 1
 
+    
 @dataclass
 class M_DISCONNECTED(MasterMex):
+    """
+    PM -> Master.
+
+    Used when PM has disconnected gracefully (and not?).
+    """
     sender: Tuple[str, int]
 
+    
 @dataclass
 class M_ERROR(MasterMex):
     on_service: MasterMex = None

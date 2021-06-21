@@ -1,8 +1,13 @@
 import threading
+import logging 
 
+from hashlib import sha1
 from queue import Queue
 from typing import *
+
 from Fiume.utils import *
+
+logging.basicConfig(format="[%(levelname)s] [%(name)s] %(message)s")
 
 class ConnectionStatus:
     def __init__(self, peer):
@@ -39,14 +44,23 @@ class ConnectionStatus:
         
 class MasterControlUnit:
     def __init__(self, metainfo, initial_bitmap):
+        self.logger = logging.getLogger("Master")
         self.metainfo = metainfo
         self.bitmap: List[bool] = initial_bitmap
         self.connections: Dict[Address, ConnectionStatus] = dict()
         self.queue_in = Queue()
 
+        # To prohbit concurrent access to the download file
         self.lock_download_file = threading.Lock()
+
+    def get_master_queue(self) -> Queue():
+        """
+        Returns the queue with which communicate with master.
+        """
+        return self.queue_in
+    
         
-    def add_connection_to(self, peer):
+    def add_connection_to(self, peer: "PeerManager"):
         """
         Call this when you connect to a new peer.
         """
@@ -169,10 +183,27 @@ class MasterControlUnit:
         return new_assignments
 
     
+    # def verify_hash(self, piece_index: int, data: bytes) -> bool:
+    #     calculated_hash = sha1(data)
+
+    #     are_equal = calculated_hash == self.metainfo.pieces_hash[piece_index]
+
+    #     if are_equal:
+    #         self.logger.debug("Calculated hash for piece %d matches with metainfo", piece_index)
+    #     else:
+    #         self.logger.error("Hashes for piece %d DO NOT MATCH!", piece_index)
+    #         breakpoint()
+
+    #     return are_equal
+
+    
     def write_piece_to_file(self, piece_index: int, data: bytes):
         """
         Writes an entire piece, received from a peer, to the downloaded
         file. 
+
+        It assumes that the data received where already hash-verified by
+        the peer manager! 
         """
         with self.lock_download_file:
 
@@ -203,6 +234,7 @@ class MasterControlUnit:
 
             assert isinstance(mex, MasterMex)
 
+            # When we are informed that a peer 
             if isinstance(mex, M_PEER_HAS):
                 status = self.connections[mex.sender]
                 status.update_peer_has(mex.pieces_index)
@@ -227,7 +259,7 @@ class MasterControlUnit:
                 # connection and seed, or to disconnect
                 if all(self.bitmap):
                     self.send_all(M_DEBUG("completed"))
-
+                    print("Completed download!")
                 
             elif isinstance(mex, M_DISCONNECTED):
                 mapping = self.redistribute_pieces_of(mex.sender)
@@ -240,8 +272,11 @@ class MasterControlUnit:
 
                     
             elif isinstance(mex, M_PEER_REQUEST):
+                # TODO: un'idea. Al posto che inviare il pezzo intero sulla queue
+                # (che è pesante, visto che un pezzo può essere anche 1Mb)
+                # invia al peer il Lock usato per scrivere/leggere il file,
+                # self.lock_download_file! 
                 if not self.bitmap[mex.piece_index]:
-                    # print("Asking for a piece we don't yet have!")
                     self.send_to(mex.sender, M_ERROR(mex, "We don't have requested piece"))
                     continue
                 

@@ -1,6 +1,7 @@
 from unittest.mock import Mock, MagicMock
 from queue import Queue
 from pathlib import * 
+from hashlib import sha1
 
 import unittest
 import random
@@ -26,13 +27,17 @@ class PeerHasEverything(unittest.TestCase):
         piece_size = 256
         piece_number = 100
 
+        self.data = [random.randbytes(piece_size) for _ in range(piece_number)]
+        self.hashes = [sha1(piece) for piece in self.data]
+        
         self.file = tempfile.NamedTemporaryFile()
         self.file.close()
 
         self.metainfo = Mock(
             piece_size=piece_size,
             piece_number=piece_number,
-            download_fpath=Path(self.file.name)
+            download_fpath=Path(self.file.name),
+            pieces_hash = self.hashes
         )
         
         self.peer  = Mock(address=("localhost", 50154), queue_in=Queue())
@@ -96,9 +101,9 @@ class PeerHasEverything(unittest.TestCase):
         scheduled_pieces = self.peer.queue_in.get().pieces_index
 
         # We pretend that one of them has been received
-        random_downloaded_piece = random.choice(scheduled_pieces) 
+        random_piece = random.choice(scheduled_pieces) 
         self.send_mcu(
-            M_PIECE(random_downloaded_piece, b"", self.peer.address)
+            M_PIECE(random_piece, self.data[random_piece], self.peer.address)
         )
 
         # We receive two messages, one is the HAVE and the next one is the
@@ -108,13 +113,13 @@ class PeerHasEverything(unittest.TestCase):
 
         # Checks on HAVE
         self.assertIsInstance(new_have, M_NEW_HAVE)
-        self.assertEqual(new_have.piece_index, random_downloaded_piece)
+        self.assertEqual(new_have.piece_index, random_piece)
 
         # Checks on SCHEDULE
         self.assertIsInstance(new_schedule, M_SCHEDULE)
         self.assertEqual(len(new_schedule.pieces_index), 1)
         self.assertNotIn(
-            random_downloaded_piece,
+            random_piece,
             new_schedule.pieces_index
         )
         self.assertNotIn(
@@ -146,6 +151,7 @@ class PeerHasEverything(unittest.TestCase):
             p2_scheduled.pieces_index
         )
 
+
         
     def test_when_no_blocks_to_assign_assign_nothing(self):
         self.send_mcu(M_PEER_HAS([0], self.peer.address, schedule_new_pieces=3))
@@ -154,7 +160,7 @@ class PeerHasEverything(unittest.TestCase):
 
         self.assertEqual(scheduled, 0)
 
-        self.send_mcu(M_PIECE(0, b"", self.peer.address))
+        self.send_mcu(M_PIECE(0, self.data[0], self.peer.address))
 
         _ = self.peer.queue_in.get() # HAVE message
 
@@ -189,7 +195,7 @@ class PeerHasEverything(unittest.TestCase):
         )
 
         # A new piece arrives from peer1
-        self.send_mcu(M_PIECE(99, b"", self.peer.address))
+        self.send_mcu(M_PIECE(99, self.data[99], self.peer.address))
 
         # But now, peer1 disconnects!
         self.send_mcu(M_DISCONNECTED(self.peer.address))
@@ -252,7 +258,7 @@ class PeerHasEverything(unittest.TestCase):
         
         # A piece arrives from peer1
         self.send_mcu(M_PIECE(random_piece,
-                              b"1" * self.metainfo.piece_size,
+                              self.data[random_piece],
                               self.peer.address))
         
         self.send_mcu(
@@ -267,7 +273,7 @@ class PeerHasEverything(unittest.TestCase):
         piece_p2 = self.get_mex(self.peer2)
         self.assertIsInstance(piece_p2, M_PIECE)
         self.assertEqual(piece_p2.piece_index, random_piece)
-        self.assertEqual(piece_p2.data, b"1" * self.metainfo.piece_size)
+        self.assertEqual(piece_p2.data, self.data[random_piece])
 
         
     def test_completed(self):
@@ -278,7 +284,7 @@ class PeerHasEverything(unittest.TestCase):
         self.get_mex(self.peer)
 
         for i in range(100):
-            self.send_mcu(M_PIECE(i, bytes([i]), self.peer.address, schedule_new_pieces=0))
+            self.send_mcu(M_PIECE(i, self.data[i], self.peer.address, schedule_new_pieces=0))
             have     = self.get_mex(self.peer) # scarta messaggio di risposta
             schedule = self.get_mex(self.peer)
             
@@ -304,8 +310,7 @@ class PeerHasEverything(unittest.TestCase):
         
         for i in range(100):
             self.send_mcu(
-                M_PIECE(i,
-                        bytes([i]) * self.metainfo.piece_size,
+                M_PIECE(i, self.data[i],
                         self.peer.address, schedule_new_pieces=0)
             )
             have     = self.get_mex(self.peer) # scarta messaggio di risposta
@@ -321,4 +326,4 @@ class PeerHasEverything(unittest.TestCase):
         
         m = self.get_mex(self.peer2)
         self.assertIsInstance(m, M_PIECE)
-        self.assertEqual(m.data, bytes([99]) * self.metainfo.piece_size)
+        self.assertEqual(m.data, self.data[99])
