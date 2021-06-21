@@ -23,9 +23,9 @@ Address = Tuple[str, int] # (ip, port)
 
 class MetaInfo(dict):
     """ 
-NB: solo per Single File Mode. 
+    NB: solo per Single File Mode. 
     
-Classe che contiene le informazioni del file .torrent
+    Classe che contiene le informazioni del file .torrent
     """
 
     def __init__(self, *args, **kwargs):
@@ -42,6 +42,7 @@ Classe che contiene le informazioni del file .torrent
         self.block_size: int = 16384 #16kb, standard
         self.total_size: int = self[b"info"][b"length"]
         self.num_pieces: int = len(self.pieces_hash)
+
         
     def __gather_trackers(self) -> List[Url]:
         """ Unites all possible trackers in a single list, useless """
@@ -52,6 +53,7 @@ Classe che contiene le informazioni del file .torrent
 
         return trackers
 
+    
     
 ###################
 
@@ -166,7 +168,7 @@ class TrackerManager:
                 response_bencode[b"tracker id"] if b"tracker id" in response_bencode else b""
             )
 
-            peers = peers.union(self.__decode_peer(response_bencode))
+            peers = peers | self.__decode_peer(response_bencode)
 
         self.peers = list(peers)
         return list(peers)
@@ -209,7 +211,8 @@ class TrackerManager:
             peers.add((ip, port))
 
         self.logger.debug("Found the following peers: %s", str(peers))
-            
+
+        print(peers)
         return peers
 
     
@@ -217,3 +220,10 @@ class TrackerManager:
         return random.choice([p for p in self.peers if p[1] not in exclude])
 
     
+def temp(b):
+    peers = set()
+    for raw_address in utils.split_in_chunks(b, 6):
+        ip = ipaddress.IPv4Address(raw_address[:4]).exploded
+        port = utils.to_int(raw_address[4:6])
+        peers.add((ip, port))
+    return peers

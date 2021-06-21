@@ -13,7 +13,7 @@ import Fiume.master as master
 def repeat(times):
     def repeatHelper(f):
         def callHelper(*args):
-            for i in range(0, times):
+            for diocane in range(0, times):
                 f(*args)
 
         return callHelper
@@ -46,7 +46,11 @@ class PeerHasEverything(unittest.TestCase):
 
         self.initial_bitmap = [False for _ in range(piece_number)]
         
-        self.mcu = master.MasterControlUnit(self.metainfo, self.initial_bitmap)
+        self.mcu = master.MasterControlUnit(
+            self.metainfo,
+            self.initial_bitmap,
+            {"download_fpath": Path("/dev/null")}
+        )
         self.mcu.main()
         self.mcu.add_connection_to(self.peer)
         
@@ -67,6 +71,7 @@ class PeerHasEverything(unittest.TestCase):
         When newly connected to a peer, the master should assign the 
         PeerManager 10 pieces to download. 
         """
+        self.get_mex(self.peer) # M_out_bitmap mex
         self.send_mcu(
             M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=10)
         )
@@ -83,7 +88,7 @@ class PeerHasEverything(unittest.TestCase):
         )
 
 
-    @repeat(9) # setUp() -> test (9 times) -> tearDown()
+    # @repeat(9) # setUp() -> test (9 times) -> tearDown()
     def test_dont_reask_already_scheduled_pieces(self):
         """
         When a whole piece is received, this piece is sent to the master;
@@ -93,6 +98,9 @@ class PeerHasEverything(unittest.TestCase):
         2) update its own global bitmap
         3) assign a new piece to download to the peerManager
         """
+        # Diocane, ignora queste righe
+        m = self.get_mex(self.peer) # M_out_bitmap mex (maybe)
+
         self.send_mcu(
             M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=10)
         )
@@ -135,7 +143,11 @@ class PeerHasEverything(unittest.TestCase):
         Peer2 has all pieces from [50..100];
         Master must not schedule, for peer2, any piece from 50..60
         """
+        self.get_mex(self.peer) # M_out_bitmap mex
+
         self.mcu.add_connection_to(self.peer2)
+        self.get_mex(self.peer2) # M_out_bitmap mex
+
         self.send_mcu(
             M_PEER_HAS(list(range(60)),
                        self.peer.address,
@@ -154,6 +166,7 @@ class PeerHasEverything(unittest.TestCase):
 
         
     def test_when_no_blocks_to_assign_assign_nothing(self):
+        self.get_mex(self.peer) # M_out_bitmap mex
         self.send_mcu(M_PEER_HAS([0], self.peer.address, schedule_new_pieces=3))
 
         scheduled = self.peer.queue_in.get().pieces_index[0]
@@ -174,6 +187,8 @@ class PeerHasEverything(unittest.TestCase):
         When a peer gracefully disconnects, the scheduled pieces that it had
         are redistributed to all the other pieces.
         """
+        self.get_mex(self.peer) # M_out_bitmap mex
+
         # A peer reserves for itself all the pieces
         self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=100))
 
@@ -181,6 +196,7 @@ class PeerHasEverything(unittest.TestCase):
         # peer1 has already scheduled all the pieces; as a result,
         # no piece is scheduled for peer2
         self.mcu.add_connection_to(self.peer2)
+        self.get_mex(self.peer2) # M_out_bitmap mex
         self.send_mcu(M_PEER_HAS(list(range(100)), self.peer2.address))
         self.assertEqual(
             self.get_mex(self.peer2).pieces_index,
@@ -188,6 +204,7 @@ class PeerHasEverything(unittest.TestCase):
         )
 
         self.mcu.add_connection_to(self.peer3)
+        self.get_mex(self.peer3) # M_out_bitmap mex
         self.send_mcu(M_PEER_HAS(list(range(50)), self.peer3.address))
         self.assertEqual(
             self.get_mex(self.peer3).pieces_index,
@@ -233,6 +250,7 @@ class PeerHasEverything(unittest.TestCase):
         """ 
         Tests peer's requests for blocks.
         """
+        self.get_mex(self.peer) # M_out_bitmap mex
 
         self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=10))       
         scheduled = self.get_mex(self.peer).pieces_index
@@ -240,6 +258,7 @@ class PeerHasEverything(unittest.TestCase):
 
         # A peer2 connects; it has no piece
         self.mcu.add_connection_to(self.peer2)
+        self.get_mex(self.peer2) # M_out_bitmap mex
         self.send_mcu(M_PEER_HAS([], self.peer2.address))
         self.assertEqual(
             self.get_mex(self.peer2).pieces_index,
@@ -280,6 +299,8 @@ class PeerHasEverything(unittest.TestCase):
         """ 
         When download is completed, master sends kill to all peers.
         """
+        self.get_mex(self.peer) # M_out_bitmap mex
+
         self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=100))       
         self.get_mex(self.peer)
 
@@ -298,10 +319,13 @@ class PeerHasEverything(unittest.TestCase):
         When we complete, other peers should still be able to
         request pieces.
         """
+        self.get_mex(self.peer) # M_out_bitmap mex
+
         self.send_mcu(M_PEER_HAS(list(range(100)), self.peer.address, schedule_new_pieces=100))       
         self.get_mex(self.peer)
 
         self.mcu.add_connection_to(self.peer2)
+        self.get_mex(self.peer2) # M_out_bitmap mex
         self.send_mcu(M_PEER_HAS(list(range(25)), self.peer2.address))
         self.assertEqual(
             self.get_mex(self.peer2).pieces_index,

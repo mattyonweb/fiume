@@ -8,7 +8,6 @@ import os
 import random
 import pathlib 
 
-from hashlib import sha1
 from queue import Queue
 from typing.io import *
 from typing import *
@@ -94,11 +93,11 @@ class PeerManager:
 
         self.scheduled: List[int] = list()
         
-        self.my_progresses: Dict[int, Tuple[int, int]] = dict()
+        self.my_progresses: Dict[int, Tuple[bytes, int]] = dict()
         self.peer_progresses: Dict[int, Tuple[int, int]] = dict()
 
-        self.cache_pieces = dict()
-        self.deferred_peer_requests = dict()
+        self.cache_pieces: Dict[int, bytes] = dict()
+        self.deferred_peer_requests: Dict[int, Tuple[int, int]] = dict()
         
         self.max_concurrent_pieces = 4
         
@@ -109,6 +108,7 @@ class PeerManager:
     def main(self):
         self.logger.debug("main")
 
+        t1 = threading.Thread(target=self.message_socket_receiver)
         t1 = threading.Thread(target=self.message_socket_receiver)
         t1.start()
         
@@ -189,7 +189,13 @@ class PeerManager:
 
         return fpath
 
-        
+
+    # # Thread a sé stante
+    # def message_socket_receiver(self):
+    #     while True:
+    #         self.message_interpreter(self.queue_in
+
+                                     
     # Thread a sé stante
     def message_socket_receiver(self):
         handshake_mex = self.socket.recv(68)
@@ -221,7 +227,7 @@ class PeerManager:
     def shutdown(self):
         self.logger.debug("Shutdown after receiving empty message from peer")
         self.send_to_master(utils.M_DISCONNECTED(self.address))
-        self.tracker_manager.notify_completion()
+        # self.tracker_manager.notify_completion()
         exit(0)
 
     
@@ -251,6 +257,8 @@ class PeerManager:
 
             # Messagi di controllo (ie. da Master) vengono intoltrati a questa funzione
             if isinstance(mex, utils.MasterMex):
+                print("PORCODIOOOOOOOOOOO")
+                print(mex)
                 self.control_message_interpreter(mex)
                 continue
 
@@ -278,7 +286,8 @@ class PeerManager:
                 self.peer_chocking = True
             elif mex_type == MexType.UNCHOKE:
                 self.peer_chocking = False
-                self.try_ask_for_piece()
+                if self.am_interested:
+                    self.try_ask_for_piece()
             elif mex_type == MexType.INTERESTED:
                 self.peer_interested = True
                 self.try_unchoke_peer()
@@ -317,6 +326,7 @@ class PeerManager:
 
             
     def control_message_interpreter(self, mex: utils.MasterMex):
+        self.logger.debug("Received message %s", str(mex))
         
         if isinstance(mex, utils.M_KILL):
             self.logger.debug("Received KILL from master")
@@ -325,9 +335,14 @@ class PeerManager:
         
         elif isinstance(mex, utils.M_DEBUG):
             self.logger.debug("Received DEBUG message from master: %s", mex.data)
-            self.send_to_master(utils.M_DEBUG("Got DEBUGGED"))
+            self.send_to_master(utils.M_DEBUG("Got DEBUGGED", self.address))
             return
-
+        
+        elif isinstance(mex, utils.M_OUR_BITMAP):
+            self.logger.debug("Received OUR_BITMAP message from master")
+            self.my_bitmap = mex.bitmap
+            return
+            
         elif isinstance(mex, utils.M_SCHEDULE):
             self.logger.debug("Received SCHEDULE message from master: %s", mex.pieces_index)
             self.scheduled += mex.pieces_index
@@ -339,7 +354,9 @@ class PeerManager:
             self.try_ask_for_piece()
             return
 
+        
         elif isinstance(mex, utils.M_NEW_HAVE):
+            self.logger.debug("Received NEW_HAVE message from master: %s", mex.piece_index)
             self.my_bitmap[mex.piece_index] = True
             return        
 
@@ -349,6 +366,8 @@ class PeerManager:
         # We put the entire piece N in a cache.
         # Then we resume the deferred request, 
         elif isinstance(mex, utils.M_PIECE):
+            self.logger.debug("Received piece %d from master", mex.piece_index)
+            
             self.cache_pieces[mex.piece_index] = mex.data
 
             if mex.piece_index not in self.deferred_peer_requests:
@@ -469,6 +488,7 @@ class PeerManager:
             if not m and p:
                 self.am_interested_in.append(i)
 
+        self.logger.debug("Sending M_PEER_HAS to master: %s", self.am_interested_in)
         # Informs master of peer's bitmap
         self.send_to_master(
             utils.M_PEER_HAS(
@@ -524,7 +544,7 @@ class PeerManager:
         return self.metainfo.piece_size
 
 
-    def ask_for_single_piece(self, piece_idx: int) -> int:
+    def ask_for_single_piece(self, piece_idx: int):
         """
         Low-level routine that sends the request for a piece to the peer.
         """
@@ -634,7 +654,11 @@ class PeerManager:
         self.logger.debug("Acknowledging that peer has new piece %d", piece_index)
         self.peer_bitmap[piece_index] = True
         self.send_to_master(
-            utils.M_PEER_HAS([piece_index], self.address, n=1)
+            utils.M_PEER_HAS(
+                [piece_index],
+                self.address,
+                schedule_new_pieces=1
+            )
         )
 
         
@@ -768,7 +792,7 @@ class PeerManager:
 
         
     def verify_hash(self, piece_index: int, data: bytes):
-        sha = sha1(data)
+        sha = utils.sha1(data)
 
         are_equal = sha == self.metainfo.pieces_hash[piece_index]
 
@@ -813,7 +837,7 @@ class ThreadedServer:
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
         # creata ad hoc.
-        # TODO: serve davvero, qui?
+        # TODO: serve davvero, qui? Spostare in metainfo?
         self.global_bitmap: List[bool] = utils.data_to_bitmap(
             self.options["output_file"],
             num_pieces=self.metainfo.num_pieces
@@ -822,7 +846,7 @@ class ThreadedServer:
         self.max_peer_connections = 1
         self.active_connections = set()
         
-        self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap)
+        self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap, self.options)
         self.master_queue = self.mcu.get_master_queue()
 
 
@@ -831,6 +855,10 @@ class ThreadedServer:
         socket_listen_t = threading.Thread(target=self.listen)
         socket_listen_t.start()        
 
+        self.mcu.main()
+        
+        print(self.peers)
+        
         i = 0
         while i < self.max_peer_connections:
             ip, port = random.choice(self.peers)
@@ -888,7 +916,7 @@ class ThreadedServer:
             t.start()
 
             
-    def connect_as_client(self, ip, port, queues: Tuple[Queue]):
+    def connect_as_client(self, ip, port, queues: Tuple[Queue, Queue]):
         new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
         new_socket.connect((ip, port))
 

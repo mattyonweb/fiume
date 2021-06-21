@@ -53,13 +53,23 @@ class M_PEER_HAS(MasterMex):
     # How many new pieces ought the master schedule for the PeerManager, if any
     schedule_new_pieces: int = 10
 
+
+@dataclass
+class M_OUR_BITMAP(MasterMex):
+    """
+    Master -> PM.
+
+    Sent at the very beginning of a Master/PM relationship.
+    """
+    bitmap: List[bool]
+    
     
 @dataclass
 class M_NEW_HAVE(MasterMex):
     """ 
     Master -> PMs.
     Master sends this to all the peers when it receives a new, completed block.
-    Used to update peers bitmaps, keeping it synchronized with master's.
+    Used to update PMs bitmaps, keeping it synchronized with master's.
     """
     piece_index: int
 
@@ -105,13 +115,14 @@ class M_DISCONNECTED(MasterMex):
     
 @dataclass
 class M_ERROR(MasterMex):
-    on_service: MasterMex = None
-    comment: str = None
+    on_service: Union[MasterMex, None] = None
+    comment: str = ""
+
     
 @dataclass
 class M_DEBUG(MasterMex):
     data: Any
-    sender: Tuple[str, int] = None
+    sender: Tuple[str, int]
 
 ###################################à
     
@@ -161,6 +172,10 @@ def mask_data(data: List[bytes], seed: int, padding=b"") -> List[bytes]:
 def get_bitmap_file(download_fpath: Path) -> Path:
     return config.BITMAPS_DIR / download_fpath.name
 
+def update_bitmap_file(download_fpath: Path, bitmap: List[bool]):
+    with open(get_bitmap_file(download_fpath), "w") as f:
+        f.write("".join([str(int(x)) for x in bitmap]))
+        
 def empty_bitmap(num_pieces) -> List[bool]:
     return [False for _ in range(num_pieces)]
 

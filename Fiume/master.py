@@ -1,13 +1,15 @@
 import threading
 import logging 
 
-from hashlib import sha1
 from queue import Queue
 from typing import *
 
 from Fiume.utils import *
 
-logging.basicConfig(format="[%(levelname)s] [%(name)s] %(message)s")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="[%(levelname)s] [%(name)s] %(message)s"
+)
 
 class ConnectionStatus:
     def __init__(self, peer):
@@ -43,16 +45,20 @@ class ConnectionStatus:
 
         
 class MasterControlUnit:
-    def __init__(self, metainfo, initial_bitmap):
+    def __init__(self, metainfo, initial_bitmap, options):
         self.logger = logging.getLogger("Master")
+        
         self.metainfo = metainfo
+        self.options  = options
         self.bitmap: List[bool] = initial_bitmap
+        
         self.connections: Dict[Address, ConnectionStatus] = dict()
         self.queue_in = Queue()
 
         # To prohbit concurrent access to the download file
         self.lock_download_file = threading.Lock()
 
+        
     def get_master_queue(self) -> Queue():
         """
         Returns the queue with which communicate with master.
@@ -65,7 +71,8 @@ class MasterControlUnit:
         Call this when you connect to a new peer.
         """
         self.connections[peer.address] = ConnectionStatus(peer)
-
+        self.send_to(peer.address, M_OUR_BITMAP(self.bitmap))
+        
         
     def send_to(self, address: Address, mex: MasterMex):
         """ 
@@ -89,10 +96,17 @@ class MasterControlUnit:
         Must also inform all peers of this update!
         """
         self.bitmap[new_piece] = True
-        self.send_all(M_NEW_HAVE(new_piece))
 
+        update_bitmap_file( # in utils.py
+            self.options["download_fpath"],
+            self.bitmap
+        )
+
+        self.send_all(M_NEW_HAVE(new_piece))
+        
 
     def bitmap_to_set(self) -> Set[int]:
+        # TODO: sposta in utils
         out = set()
         for i in range(len(self.bitmap)):
             if self.bitmap[i]:
@@ -214,6 +228,7 @@ class MasterControlUnit:
 
 
     
+    
     def receiver_loop(self):
         while True:
             mex = self.queue_in.get()
@@ -244,7 +259,7 @@ class MasterControlUnit:
                 # have completed the download. The peers will decide if mantaining the
                 # connection and seed, or to disconnect
                 if all(self.bitmap):
-                    self.send_all(M_DEBUG("completed"))
+                    self.send_all(M_DEBUG("completed", None))
                     print("Completed download!")
                 
             elif isinstance(mex, M_DISCONNECTED):
