@@ -847,7 +847,7 @@ class ThreadedServer:
 
         self.options = options
         # self.peers = self.tracker_manager.notify_start()
-        self.peers = [('78.14.24.41', 50144)]
+        self.peers = [('78.14.24.41', 50144), ('78.14.24.41', 50145)]
 
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
@@ -858,7 +858,7 @@ class ThreadedServer:
             num_pieces=self.metainfo.num_pieces
         )
         
-        self.max_peer_connections = 1
+        self.max_peer_connections = 2
         self.active_connections = set()
         
         self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap, self.options)
