@@ -140,7 +140,7 @@ class TrackerManager:
         }
 
     
-    def notify_start(self) -> List[Address]:
+    def notify_start(self, exclude_self=True) -> List[Address]:
         """ 
         Inform all the trackers that you are about to start downloading, and
         hence ask for peers.
@@ -172,6 +172,7 @@ class TrackerManager:
             peers = peers | self.__decode_peer(response_bencode)
 
         self.peers = list(peers)
+
         return list(peers)
 
     

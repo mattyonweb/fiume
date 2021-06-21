@@ -59,6 +59,7 @@ class PeerManager:
         # self.address = self.socket.getsockname() # TODO
         
         self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
+        self.logger.setLevel(options.get("debug-level", logging.DEBUG))
         self.logger.debug("__init__")
                 
         self.metainfo = metainfo
@@ -109,7 +110,6 @@ class PeerManager:
         self.logger.debug("main")
 
         t1 = threading.Thread(target=self.message_socket_receiver)
-        t1 = threading.Thread(target=self.message_socket_receiver)
         t1.start()
         
         # Stabilisce chi fra i due peers dovrà inviare il primo messaggio
@@ -145,14 +145,6 @@ class PeerManager:
         return piece[piece_offset:piece_offset+piece_length]
 
     
-    def write_data(self, piece_index, piece_offset, payload):
-        """
-        Writes data at a given offset on the downloaded file.
-        """
-        with open(self.out_fpath, "rb+") as file:
-            file.seek(self.metainfo.piece_size * piece_index + piece_offset, 0)
-            return file.write(payload)
-
         
     def send_handshake(self):
         self.logger.debug("Sending HANDSHAKE")
@@ -188,12 +180,6 @@ class PeerManager:
             return fpath
 
         return fpath
-
-
-    # # Thread a sé stante
-    # def message_socket_receiver(self):
-    #     while True:
-    #         self.message_interpreter(self.queue_in
 
                                      
     # Thread a sé stante
@@ -285,7 +271,9 @@ class PeerManager:
             elif mex_type == MexType.UNCHOKE:
                 self.peer_chocking = False
                 if self.am_interested:
-                    self.try_ask_for_piece()
+                    # TODO: ricevuto unchoke, questa istruzione che segue
+                    # richiede UN solo pezzo, invece che max_concurrent_pieces
+                    self.try_ask_for_piece() 
             elif mex_type == MexType.INTERESTED:
                 self.peer_interested = True
                 self.try_unchoke_peer()
@@ -324,7 +312,7 @@ class PeerManager:
 
             
     def control_message_interpreter(self, mex: utils.MasterMex):
-        self.logger.debug("[MASTER] Received message %s", str(mex))
+        self.logger.debug("[MASTER] Received message %s", str(type(mex)))
         
         if isinstance(mex, utils.M_KILL):
             self.logger.debug("[MASTER] Received KILL from master")
@@ -452,7 +440,6 @@ class PeerManager:
         if mex is None:
             raise Exception("Messaggio impossibile da costruire")
 
-        self.old_messages.append(("self", mex))
         return mex
                     
 
@@ -467,15 +454,16 @@ class PeerManager:
             num_pieces=self.metainfo.num_pieces
         )
 
-        # Pretty view of my/peer bitmaps
-        # TODO: rendilo funzione a se stante
-        print("my:   |", end="")
-        for my in self.my_bitmap:
-            print("x" if my else " ", end="")
-        print("\npeer: |", end="")
-        for peer in self.peer_bitmap:
-            print("x" if peer else " ", end="")
-        print()
+        if len(self.my_bitmap) < 80:
+            # Pretty view of my/peer bitmaps
+            # TODO: rendilo funzione a se stante
+            print("my:   |", end="")
+            for my in self.my_bitmap:
+                print("x" if my else " ", end="")
+            print("\npeer: |", end="")
+            for peer in self.peer_bitmap:
+                print("x" if peer else " ", end="")
+            print()
 
         # Sanity check
         assert len(self.my_bitmap) == len(self.peer_bitmap)
@@ -486,7 +474,7 @@ class PeerManager:
             if not m and p:
                 self.am_interested_in.append(i)
 
-        self.logger.debug("[MASTER] Sending M_PEER_HAS to master: %s", self.am_interested_in)
+        self.logger.debug("[MASTER] Sending M_PEER_HAS to master")
         # Informs master of peer's bitmap
         self.send_to_master(
             utils.M_PEER_HAS(
@@ -499,10 +487,11 @@ class PeerManager:
         # Se, dal confronto fra la mia e l'altrui bitmap, scopro
         # che non mi interessa nulla di ciò che ha il peer, informalo che
         # sei NOT_INTERESTED
-        if len(self.am_interested_in) == 0:
+        if len(self.am_interested_in) == 0 or len(self.scheduled) == 0:
             self.logger.debug("Nothing to be interested in")
             if self.am_interested:
                 self.am_interested = False
+                self.logger.debug("Sending NOT_INTERESTED")
                 self.send_message(MexType.NOT_INTERESTED)
             return
         
@@ -602,14 +591,16 @@ class PeerManager:
             return
 
         # Se sto già scaricando il numero max di pieces contemporaneamente
-        if len(self.my_progresses) >= self.max_concurrent_pieces:
+        if len(self.my_progresses) > self.max_concurrent_pieces:
             self.logger.debug("Already downloading at the fullest")
             return
 
         if not self.am_interested:
-            self.logger.warning("Want to ask piece %d, but not interested; sending INTERESTED")
+            self.logger.warning("Want to ask piece, but I'm not interested? Sending INTERESTED", )
             self.am_interested = True
             self.send_message(MexType.INTERESTED)
+            if self.peer_chocking:
+                return # wait for unchoke
             
         random_piece = random.sample(
             list(not_yet_started), #non si può fare random choice su set()
@@ -632,7 +623,7 @@ class PeerManager:
         if len(self.my_progresses) == 0: # se non ci sono pezzi incompleti
             return self.ask_for_new_pieces()
 
-        if len(self.my_progresses) >= self.max_concurrent_pieces:
+        if len(self.my_progresses) > self.max_concurrent_pieces:
             self.logger.debug("Already topping max concurrent requests")
             return
 
@@ -640,6 +631,8 @@ class PeerManager:
             self.logger.warning("Want to ask piece %d, but not interested; sending INTERESTED")
             self.am_interested = True
             self.send_message(MexType.INTERESTED)
+            if self.peer_chocking:
+                return
             
         if suggestion is not None:
             piece_idx = suggestion
@@ -654,7 +647,7 @@ class PeerManager:
             MexType.REQUEST, 
             piece_index=piece_idx,
             piece_offset=offset_start,
-            piece_length=total_len - offset_start
+            piece_length=min(self.metainfo.block_size, total_len - offset_start)
         )
         
 
@@ -683,21 +676,32 @@ class PeerManager:
             )
             return
 
+        
+        # Aggiorna my_progersses
+        old_data, piece_size = self.my_progresses[piece_index]
+
+        if piece_offset < len(old_data):
+            self.logger.warning("Duplicate block, received offset %d but expecting %d",
+                                piece_offset, len(old_data))
+            return # TODO: ?
+                                
         self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s",
                           piece_index, piece_offset, len(piece_payload),
                           piece_payload[:4], piece_payload[-4:])
-       
-        # Aggiorna my_progersses
-        old_data, piece_size = self.my_progresses[piece_index]
+                                
         new_data = old_data + piece_payload
         
         if len(new_data) == piece_size:
             self.logger.debug("Completed download of piece %d", piece_index)
             
-            del self.my_progresses[piece_index]
-
             if not self.verify_hash(piece_index, new_data):
                 raise Exception("Hashes not matching") #TODO
+
+            print("Completed: {:.1f}%".format(
+                100 * (1 + sum(int(x) for x in self.my_bitmap)) / len(self.my_bitmap)
+            ))
+                  
+            del self.my_progresses[piece_index]
 
             self.logger.debug("Sending HAVE for piece %d to peer", piece_index)
             self.send_message(MexType.HAVE, piece_index=piece_index)
@@ -846,9 +850,15 @@ class ThreadedServer:
         self.logger.debug("Self port: %d", self.port)
 
         self.options = options
-        # self.peers = self.tracker_manager.notify_start()
-        self.peers = [('78.14.24.41', 50144), ('78.14.24.41', 50145)]
 
+        self.peers = list()
+        peers = self.tracker_manager.notify_start()
+        for ip, pport in peers:
+            if ip in ["localhost", utils.get_external_ip()]:
+                if port == pport:
+                    continue
+            self.peers.append((ip, pport))
+            
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
         # creata ad hoc.
@@ -864,6 +874,7 @@ class ThreadedServer:
         self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap, self.options)
         self.master_queue = self.mcu.get_master_queue()
 
+        self.pms = list()
 
         
     def main(self):       
@@ -875,7 +886,7 @@ class ThreadedServer:
         print(self.peers)
         
         i = 0
-        while i < self.max_peer_connections:
+        while i < min(self.max_peer_connections, len(self.peers)):
             ip, port = random.choice(self.peers)
             self.logger.debug("Chosen peer: %s:%s", ip, port)
             
@@ -894,7 +905,7 @@ class ThreadedServer:
                 peer_manager = self.connect_as_client(ip, port, queues)
                 self.active_connections.add((ip, port))
                 self.mcu.add_connection_to(peer_manager)
-
+                self.pms.append(peer_manager)
                 i += 1
                 
             except Exception as e:
@@ -926,6 +937,7 @@ class ThreadedServer:
 
             self.active_connections.add(address)
             self.mcu.add_connection_to(newPeer)
+            self.pms.append(new_peer)
             
             t = threading.Thread(target = newPeer.main)
             t.start()
@@ -957,11 +969,13 @@ import Fiume.metainfo_decoder as md
 import bencodepy
 
 options = {
-    "torrent_path": pathlib.Path("/home/groucho/torrent/image.jpg.torrent"),
-    "output_file":  pathlib.Path("/home/groucho/torrent/downloads/image.jpg"),
+    "torrent_path": pathlib.Path("/home/groucho/torrent/book.pdf.torrent"),
+    "output_file":  pathlib.Path("/home/groucho/torrent/downloads/book.pdf"),
     "delay": 0,
     "debug": False,
+    "debug-level": logging.WARNING
 }
+
 
 with open(options["torrent_path"], "rb") as f:
     metainfo = md.MetaInfo(
@@ -977,17 +991,3 @@ t = ThreadedServer(
 )
 
 t.main()
-# th = threading.Thread(target=t.listen)
-# th.start()
-
-# peer = ("78.14.24.41", 50144)
-# pm = t.connect_as_client(*peer, (Queue(), Queue())
-
-# try:
-#     peer = tm.peers[0]
-#     print(peer)
-#     pm = t.connect_as_client(*peer)
-# except Exception as e:
-#     print(e)
-#     breakpoint()
-#     raise(e)

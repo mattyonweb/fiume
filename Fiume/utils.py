@@ -259,3 +259,8 @@ def already_completed_download(download_fpath: Path):
     with open(bitmap_fpath, "r") as f:
         return all([bool(x) for x in f.read().strip()])
     
+
+def get_external_ip():
+    import requests
+
+    return requests.get("https://api.ipify.org").text
