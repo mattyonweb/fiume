@@ -92,7 +92,7 @@ class PeerManager:
         self.am_interested_in: List[int] = list()
         self.peer_interested_in: List[int] = list()
 
-        self.pending: List[int] = list()
+        self.scheduled: List[int] = list()
         
         self.my_progresses: Dict[int, Tuple[int, int]] = dict()
         self.peer_progresses: Dict[int, Tuple[int, int]] = dict()
@@ -220,6 +220,7 @@ class PeerManager:
     
     def shutdown(self):
         self.logger.debug("Shutdown after receiving empty message from peer")
+        self.send_to_master(utils.M_DISCONNECTED(self.address))
         self.tracker_manager.notify_completion()
         exit(0)
 
@@ -316,15 +317,31 @@ class PeerManager:
 
             
     def control_message_interpreter(self, mex: utils.MasterMex):
+        
         if isinstance(mex, utils.M_KILL):
             self.logger.debug("Received KILL from master")
-            self.send_to_master(utils.M_DEBUG("Got KILLED"))
-            return
+            self.send_to_master(utils.M_DEBUG("Got KILLED", self.address))
+            return # TODO
         
         elif isinstance(mex, utils.M_DEBUG):
             self.logger.debug("Received DEBUG message from master: %s", mex.data)
             self.send_to_master(utils.M_DEBUG("Got DEBUGGED"))
             return
+
+        elif isinstance(mex, utils.M_SCHEDULE):
+            self.logger.debug("Received SCHEDULE message from master: %s", mex.pieces_index)
+            self.scheduled += mex.pieces_index
+            # Avoids deadlock:
+            # if no pieces are currently downloaded, try_ask_for_piece will
+            # start downloading the received piece(s);
+            # if we were downloading pieces already, simply start one of the
+            # new pieces (if we are not > max_concurrent_pieces
+            self.try_ask_for_piece()
+            return
+
+        elif isinstance(mex, utils.M_NEW_HAVE):
+            self.my_bitmap[mex.piece_index] = True
+            return        
 
         # M_Piece has a bit complicated workflow.
         # If we receive a M_PIECE, it means that in the past we requested to the
@@ -349,15 +366,24 @@ class PeerManager:
                 deferred=True #important!
             )
                 
-        
+        else:
+            breakpoint()
+            raise Exception("unknown message")
         
         
     def send_message(self, mexType: MexType, **kwargs):
+        """
+        Sends (via socket) a message to the peer.
+        """
         if "delay" in self.options:
             time.sleep(self.options["delay"])
         self.socket.sendall(self.make_message(mexType, **kwargs))
 
+        
     def make_message(self, mexType: MexType, **kwargs) -> bytes:
+        """
+        Builds a peer message of a given type (without sending it!)
+        """
         mex = None
         
         if mexType == MexType.KEEP_ALIVE:
@@ -414,13 +440,18 @@ class PeerManager:
                     
 
     def interpret_received_bitfield(self, mex_payload: bytes):
-        """ Analyzes a received bitmap """
+        """ 
+        Analyzes and reacts to a received bitmap.
+        """
+
+        # Sets peer_bitmap according to the mex received
         self.peer_bitmap = utils.bitmap_to_bool(
             mex_payload,
             num_pieces=self.metainfo.num_pieces
         )
 
-        # Stampo a video grafichino dei pezzi 
+        # Pretty view of my/peer bitmaps
+        # TODO: rendilo funzione a se stante
         print("my:   |", end="")
         for my in self.my_bitmap:
             print("x" if my else " ", end="")
@@ -429,18 +460,21 @@ class PeerManager:
             print("x" if peer else " ", end="")
         print()
 
+        # Sanity check
         assert len(self.my_bitmap) == len(self.peer_bitmap)
+
         
         # Idenitifico (if any) i pieces del mio peer che io non ho
         for i, (m,p) in enumerate(zip(self.my_bitmap, self.peer_bitmap)):
             if not m and p:
                 self.am_interested_in.append(i)
-                
+
+        # Informs master of peer's bitmap
         self.send_to_master(
             utils.M_PEER_HAS(
                 self.am_interested_in,
                 self.address,
-                1                
+                self.max_concurrent_pieces+1, #TODO: migliorabile!
             )
         )
         
@@ -454,21 +488,26 @@ class PeerManager:
                 self.send_message(MexType.NOT_INTERESTED)
             return
         
-        if self.am_interested: # Se già mi interessava qualcosa, non fare nulla
+        if self.am_interested: # Se ero già interessato in precedenza, non fare nulla
             return
 
         # Altrimenti dichiara il tuo interesse
         self.am_interested = True
         self.logger.debug("Sending INTERESTED message")
         self.send_message(MexType.INTERESTED)
+
         self.ask_for_new_pieces()
+
         return
 
     
-    def get_piece_size(self, piece_index):
+    def get_piece_size(self, piece_index: int) -> int:
         """ 
-        Utile, perché l'ultimo piece da scaricare ha lunghezza 
-        diversa rispetto agli altri; così viene gestito correttamente
+        Returns the length of a piece. 
+        
+        This is needed, because the last pieces of a torrent probably
+        has an irregular size. We want to catch corner cases, so...
+        this is it.
         """
         
         if piece_index != self.metainfo.num_pieces - 1:
@@ -485,8 +524,10 @@ class PeerManager:
         return self.metainfo.piece_size
 
 
-        
-    def ask_for_single_piece(self, piece_idx):
+    def ask_for_single_piece(self, piece_idx: int) -> int:
+        """
+        Low-level routine that sends the request for a piece to the peer.
+        """
         self.logger.debug("Asking for new piece, number %d", piece_idx)
 
         piece_length = min(
@@ -517,11 +558,11 @@ class PeerManager:
         
     def ask_for_new_pieces(self):
         """ 
-        Richiedo un pezzo completamente nuovo, cioè non già in self.progresses
+        Richiedo un pezzo completamente nuovo, cioè non già in self.progresses.
         """
 
-        if len(self.am_interested_in) == 0 or len(self.pending) == 0:
-            if len(self.pending) == 0:
+        if len(self.am_interested_in) == 0 or len(self.scheduled) == 0:
+            if len(self.scheduled) == 0:
                 self.logger.debug("No pieces pending!")
             self.logger.debug("Nothing to be interested in")
             self.logger.debug("Sending NOT-INTERESTED message")
@@ -535,8 +576,7 @@ class PeerManager:
             return
 
         not_yet_started = set(self.am_interested_in) - set(self.my_progresses.keys())
-        # breakpoint()
-        not_yet_started = not_yet_started.intersection(set(self.pending))
+        not_yet_started = not_yet_started & set(self.scheduled)
         
         # Se tutti i pieces sono già stati avviati o completati
         if len(not_yet_started) == 0:
@@ -547,7 +587,7 @@ class PeerManager:
         if len(self.my_progresses) >= self.max_concurrent_pieces:
             self.logger.debug("Already downloading at the fullest")
             return
-                
+
         random_piece = random.sample(
             list(not_yet_started), #non si può fare random choice su set()
             k=min(self.max_concurrent_pieces - len(self.my_progresses),
@@ -596,6 +636,7 @@ class PeerManager:
         self.send_to_master(
             utils.M_PEER_HAS([piece_index], self.address, n=1)
         )
+
         
     def manage_received_piece(self, piece_index, piece_offset, piece_payload):
         if self.my_bitmap[piece_index]:
@@ -605,9 +646,6 @@ class PeerManager:
             )
             return
 
-        
-        # self.write_data(piece_index, piece_offset, piece_payload)        
-        
         self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s",
                           piece_index, piece_offset, len(piece_payload),
                           piece_payload[:4], piece_payload[-4:])
@@ -621,14 +659,15 @@ class PeerManager:
             
             del self.my_progresses[piece_index]
 
-            if not self.verify_hash(piece_index):
+            if not self.verify_hash(piece_index, new_data):
                 raise Exception("Hashes not matching") #TODO
 
             self.logger.debug("Setting my bitfield for piece %d as PRESENT", piece_index)
             self.update_my_bitmap(piece_index, True)
             self.am_interested_in.remove(piece_index)
 
-            self.pending.remove(piece_index)
+            # M_PIECE richiede anche un nuovo pezzo al Master
+            self.scheduled.remove(piece_index)
             self.send_to_master(utils.M_PIECE(piece_index, new_data, self.address))
             
             self.logger.debug("Sending HAVE for piece %d", piece_index)
@@ -650,7 +689,7 @@ class PeerManager:
             return
 
         log_str = "Resuming deferred " if deferred else "Received "
-        self.logger.debug(s + "REQUEST for piece %d offset %d length %d: will send %s...%s",
+        self.logger.debug(log_str + "REQUEST for piece %d offset %d length %d",
                           p_index, p_offset, p_length)
 
         if not self.peer_interested:
@@ -842,7 +881,7 @@ class ThreadedServer:
                 Initiator.OTHER
             )
 
-            self.active_connections.add((ip, port))
+            self.active_connections.add(address)
             self.mcu.add_connection_to(newPeer)
             
             t = threading.Thread(target = newPeer.main)
