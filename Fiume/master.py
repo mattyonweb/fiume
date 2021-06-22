@@ -155,7 +155,7 @@ class MasterControlUnit:
         return chosen
 
 
-    def redistribute_pieces_of(self, address: Address) -> Dict[Address, List[int]]:
+    def redistribute_pieces(self, redistrib_pieces: List[int]) -> Dict[Address, List[int]]:
         """
         The goal is to redistribute the already scheduled pieces of
         peer P to all the other peers.
@@ -164,8 +164,6 @@ class MasterControlUnit:
         the pieces; if more than one choice is possible, simply choose
         randomly.
         """
-        state = self.connections[address]
-        redistrib_pieces = state.already_scheduled
         
         # (piece_index da redistribuire) : (possibili peers che ce l'hanno) 
         table: Dict[int, List[Address]] = {
@@ -173,9 +171,6 @@ class MasterControlUnit:
         }
         
         for peer, p_state in self.connections.items():
-            if peer == address:
-                continue
-            
             for common_piece in (p_state.peer_has & redistrib_pieces):
                 table[common_piece].append(peer)
 
@@ -265,10 +260,12 @@ class MasterControlUnit:
 
                     
             elif isinstance(mex, M_DISCONNECTED):
+                redistrib_pieces = self.connections[mex.sender].already_scheduled
+                
                 self.send_to(mex.sender, M_KILL())
                 del self.connections[mex.sender]
 
-                mapping = self.redistribute_pieces_of(mex.sender)
+                mapping = self.redistribute_pieces(redistrib_pieces)
 
                 for peer_addr, new_scheduled in mapping.items():
                     self.connections[peer_addr].set_suggested(new_scheduled)                    

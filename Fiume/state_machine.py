@@ -905,14 +905,15 @@ class ThreadedServer:
             return
         
         i = 0
-        while i < min(self.max_peer_connections, len(self.peers)):
+        # while i < min(self.max_peer_connections, len(self.peers)):
+        while True:
             
             ip, port = random.choice(self.peers)
             self.logger.debug("Chosen peer: %s:%s", ip, port)
             
             if (ip, port) in self.active_connections:
                 self.logger.warning("Chosen an already connected peer")
-                time.sleep(1)
+                time.sleep(2)
                 continue
             
             if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
