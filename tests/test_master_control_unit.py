@@ -49,6 +49,7 @@ class PeerHasEverything(unittest.TestCase):
         self.mcu = master.MasterControlUnit(
             self.metainfo,
             self.initial_bitmap,
+            Queue(), 
             {"download_fpath": Path("/dev/null")}
         )
         self.mcu.main()
@@ -302,8 +303,8 @@ class PeerHasEverything(unittest.TestCase):
             _ = self.get_mex(self.peer)
             
         completed = self.get_mex(self.peer, timeout=1)
-        self.assertIsInstance(completed, M_DEBUG)
-        self.assertEqual(completed.data, "completed")
+        self.assertIsInstance(completed, M_COMPLETED)
+        self.assertIsInstance(self.mcu.queue_connection_manager.get(), M_COMPLETED)
 
         
     def test_completed_but_exists_peer_with_missing_pieces(self):
@@ -336,8 +337,8 @@ class PeerHasEverything(unittest.TestCase):
 
         self.send_mcu(M_PEER_REQUEST(99, self.peer2.address))
         m = self.get_mex(self.peer2)
-        self.assertIsInstance(m, M_DEBUG)
-        self.assertEqual(m.data, "completed")
+        self.assertIsInstance(m, M_COMPLETED)
+        self.assertIsInstance(self.mcu.queue_connection_manager.get(), M_COMPLETED)
         
         m = self.get_mex(self.peer2)
         self.assertIsInstance(m, M_PIECE)

@@ -45,7 +45,7 @@ class ConnectionStatus:
 
         
 class MasterControlUnit:
-    def __init__(self, metainfo, initial_bitmap, options):
+    def __init__(self, metainfo, initial_bitmap, cm_queue, options):
         self.logger = logging.getLogger("Master")
         
         self.metainfo = metainfo
@@ -54,7 +54,8 @@ class MasterControlUnit:
         
         self.connections: Dict[Address, ConnectionStatus] = dict()
         self.queue_in = Queue()
-
+        self.queue_connection_manager = cm_queue
+        
         # To prohbit concurrent access to the download file
         self.lock_download_file = threading.Lock()
 
@@ -98,7 +99,6 @@ class MasterControlUnit:
         self.bitmap[new_piece] = True
 
         update_bitmap_file( # in utils.py
-            # self.options["output_file"],
             self.metainfo.download_fpath,
             self.bitmap
         )
@@ -223,8 +223,6 @@ class MasterControlUnit:
                 return f.read(self.metainfo.piece_size)
 
 
-    
-    
     def receiver_loop(self):
         while True:
             mex = self.queue_in.get()
@@ -255,11 +253,14 @@ class MasterControlUnit:
                 # have completed the download. The peers will decide if mantaining the
                 # connection and seed, or to disconnect
                 if all(self.bitmap):
-                    self.send_all(M_DEBUG("completed", None))
+                    self.send_all(M_COMPLETED())
+                    self.queue_connection_manager.put(M_COMPLETED())
                     print("Completed download!")
 
                     
             elif isinstance(mex, M_DISCONNECTED):
+                self.logger.debug("Received disconnect from %s", mex.sender)
+                
                 redistrib_pieces = self.connections[mex.sender].already_scheduled
                 
                 self.send_to(mex.sender, M_KILL())
@@ -271,6 +272,8 @@ class MasterControlUnit:
                     self.connections[peer_addr].set_suggested(new_scheduled)                    
                     self.send_to(peer_addr, M_SCHEDULE(new_scheduled))
 
+                self.queue_connection_manager.put(mex)
+                
                     
             elif isinstance(mex, M_PEER_REQUEST):
                 # TODO: un'idea. Al posto che inviare il pezzo intero sulla queue

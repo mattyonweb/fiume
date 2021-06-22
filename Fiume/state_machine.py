@@ -3,7 +3,6 @@ import time
 import threading
 import logging
 import enum
-import os
 import random
 import pathlib 
 
@@ -11,7 +10,6 @@ from queue import Queue
 from typing.io import *
 from typing import *
 
-import Fiume.config as config
 import Fiume.utils as utils
 import Fiume.master as master
 
@@ -97,7 +95,7 @@ class PeerManager:
         self.cache_pieces: Dict[int, bytes] = dict()
         self.deferred_peer_requests: Dict[int, Tuple[int, int]] = dict()
         
-        self.max_concurrent_pieces = self.options["max_concurrent_pieces"]
+        self.max_concurrent_pieces = 4
         self.timeout = self.options["timeout"]
     
         self.old_messages: List[Tuple[str, bytes]] = list()
@@ -702,7 +700,7 @@ class PeerManager:
         
         if len(new_data) >= piece_size:
             if len(new_data) > piece_size:
-                self.error.debug(
+                self.logger.error(
                     "Received more data then the expected size: %d, while expected %d",
                     len(new_data), piece_size
                 )
@@ -886,8 +884,13 @@ class ThreadedServer:
         self.timeout = self.options["timeout"]
         self.max_peer_connections = self.options["max_peer_connections"]
         self.active_connections = set()
-        
-        self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap, self.options)
+        self.is_completed = all(bool(int(x)) for x in self.global_bitmap)
+
+        self.ts_queue_in = Queue()
+        self.mcu = master.MasterControlUnit(
+            self.metainfo, self.global_bitmap,
+            self.ts_queue_in, self.options
+        )
         self.master_queue = self.mcu.get_master_queue()
 
         self.pms = list()
@@ -904,40 +907,64 @@ class ThreadedServer:
             self.logger.debug("No peers currently available")
             return
         
-        i = 0
-        # while i < min(self.max_peer_connections, len(self.peers)):
-        while True:
+        while not self.is_completed:
+            # Peek in the queue, to see if any peer has disconnected
+            # or we have completed
+            while not self.ts_queue_in.empty():
+                mex = self.ts_queue_in.get()
+                if isinstance(mex, utils.M_DISCONNECTED):
+                    self.logger.debug("Disconnected peer %s", mex.sender)
+                    self.active_connections.remove(mex.sender)
+                elif isinstance(mex, utils.M_COMPLETED):
+                    self.logger.info("Completed download!")
+                    self.completed = True
+
+            # If completed dowload, this loop ends; the thread listening
+            # for new connections however will remain alive
+            if self.completed:
+                break
+            
+            # If reached max number of connected peers
+            if len(self.active_connections) > min(self.max_peer_connections, len(self.peers)):
+                self.logger.debug("Max peer connections, sleeping 5sec")
+                time.sleep(5)
+                continue
             
             ip, port = random.choice(self.peers)
-            self.logger.debug("Chosen peer: %s:%s", ip, port)
             
             if (ip, port) in self.active_connections:
-                self.logger.warning("Chosen an already connected peer")
-                time.sleep(2)
+                self.logger.warning("Chosen an already connected peer, %s", (ip, port))
+                time.sleep(1)
                 continue
             
             if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
                 self.logger.warning("Attempting to connect to myself (%s): abort", (ip, port))
-                time.sleep(2)
+                time.sleep(1)
                 continue
-
+            
             try:
+                self.logger.debug("Trying to connect to: %s:%s", ip, port)
+                
                 queues = (Queue(), self.master_queue)
                 peer_manager = self.connect_as_client(ip, port, queues)
                 self.active_connections.add((ip, port))
                 self.mcu.add_connection_to(peer_manager)
                 self.pms.append(peer_manager)
-                i += 1
 
             except socket.timeout:
                 self.logger.debug("Cannot connect to %s after 5 seconds, abort", (ip, port))
                 continue
-            
+            except ConnectionRefusedError as e:
+                self.logger.debug("%s", e)
+                time.sleep(1)
+                continue
             except Exception as e:
                 self.logger.error("%s", e)
-                time.sleep(2)
-                continue
-            
+                raise e
+
+        self.logger.info("Completed download, now in seed-listening phase") 
+        socket_listen_t.join()
+        
     
     def listen(self):
         self.logger.debug("Started listening on %s", (self.host, self.port))
@@ -950,7 +977,7 @@ class ThreadedServer:
             client_socket, address = self.sock.accept()
             self.logger.debug("Received connection request from: %s", address)
             
-            newPeer = PeerManager(
+            new_peer = PeerManager(
                 (client_socket, address),
                 self.metainfo,
                 self.tracker_manager,
@@ -961,19 +988,14 @@ class ThreadedServer:
             )
 
             self.active_connections.add(address)
-            self.mcu.add_connection_to(newPeer)
+            self.mcu.add_connection_to(new_peer)
             self.pms.append(new_peer)
             
-            t = threading.Thread(target = newPeer.main)
+            t = threading.Thread(target = new_peer.main)
             t.start()
 
             
     def connect_as_client(self, ip, port, queues: Tuple[Queue, Queue]):
-        # new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # new_socket.settimeout(5) # 5 seconds before abort attempt to connect
-        # new_socket.connect((ip, port))
-        # new_socket.settimeout(None) # remove timeout of before
-
         new_socket = socket.create_connection((ip, port), timeout=self.timeout)
         new_socket.settimeout(self.timeout)
         
@@ -1000,7 +1022,10 @@ import bencodepy
 import argparse
 
 def parser(s=None):
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="A Bittorrent client for single-file torrent."
+    )
+
     parser.add_argument("torrent_path",
                         type=pathlib.Path,
                         help="path to .torrent file")
@@ -1034,6 +1059,13 @@ def parser(s=None):
                         dest="max_peer_connections",
                         help="max num of concurrent connections")
 
+    parser.add_argument("--max-concurrent-pieces",
+                        action="store",
+                        default=4,
+                        type=int,
+                        dest="max_concurrent_pieces",
+                        help="max num of concurrent pieces downloaded from/to peer")
+
     parser.add_argument("--suggested_peers",
                         action="store",
                         default=[],
@@ -1052,6 +1084,7 @@ def parser(s=None):
     options["debug_level"] = utils.int_to_loglevel(options["debug_level"])
     options["max_peer_connections"] = int(options["max_peer_connections"])
     options["timeout"] = int(options["timeout"])
+    options["max_concurrent_pieces"] = int(options["max_concurrent_pieces"])
     options["debug"] = False
 
     print(options)
@@ -1069,6 +1102,7 @@ if __name__ == "__main__":
         "port": 50146,
         "suggested_peers": [],
         "max_peer_connections": 2,
+        "max_concurrent_pieces": 4,
         "timeout": 15,
     }
 

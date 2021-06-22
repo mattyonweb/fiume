@@ -115,6 +115,15 @@ class M_DISCONNECTED(MasterMex):
 
     
 @dataclass
+class M_COMPLETED(MasterMex):
+    """
+    PM -> Master.
+
+    Used when PM has disconnected gracefully (and not?).
+    """
+    pass
+    
+@dataclass
 class M_ERROR(MasterMex):
     on_service: Union[MasterMex, None] = None
     comment: str = ""
