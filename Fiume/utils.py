@@ -1,5 +1,6 @@
 import random
 import os
+import logging
 
 from typing import *
 from typing.io import *
@@ -264,3 +265,11 @@ def get_external_ip():
     import requests
 
     return requests.get("https://api.ipify.org").text
+
+def int_to_loglevel(n):
+    if n == 0:
+        return logging.WARNING
+    if n == 1:
+        return logging.INFO
+
+    return logging.ERROR

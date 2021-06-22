@@ -1,4 +1,3 @@
-import socketserver
 import socket
 import time
 import threading
@@ -59,7 +58,7 @@ class PeerManager:
         # self.address = self.socket.getsockname() # TODO
         
         self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
-        self.logger.setLevel(options.get("debug-level", logging.DEBUG))
+        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
         self.logger.debug("__init__")
                 
         self.metainfo = metainfo
@@ -577,9 +576,16 @@ class PeerManager:
                 self.am_interested = False
                 self.send_message(MexType.NOT_INTERESTED)
             return
-        
+
+        if not self.am_interested:
+            self.logger.warning("Want to ask piece, but I'm not interested? Sending INTERESTED", )
+            self.am_interested = True
+            self.send_message(MexType.INTERESTED)
+            if self.peer_chocking:
+                return # wait for unchoke
+
         if self.peer_chocking:
-            self.logger.debug("Wanted to ask a new piece, but am choked")
+            self.logger.debug("Wanted to ask a new piece, but am choked")    
             return
 
         not_yet_started = set(self.am_interested_in) - set(self.my_progresses.keys())
@@ -595,13 +601,7 @@ class PeerManager:
             self.logger.debug("Already downloading at the fullest")
             return
 
-        if not self.am_interested:
-            self.logger.warning("Want to ask piece, but I'm not interested? Sending INTERESTED", )
-            self.am_interested = True
-            self.send_message(MexType.INTERESTED)
-            if self.peer_chocking:
-                return # wait for unchoke
-            
+        
         random_piece = random.sample(
             list(not_yet_started), #non si può fare random choice su set()
             k=min(self.max_concurrent_pieces - len(self.my_progresses),
@@ -829,7 +829,7 @@ class PeerManager:
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
 class ThreadedServer:
-    def __init__(self, port, metainfo, tracker_manager, **options):
+    def __init__(self, metainfo, tracker_manager, **options):
         self.host = "localhost"
         self.peer = None
         self.options = options
@@ -840,6 +840,7 @@ class ThreadedServer:
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
 
+        port = options["port"]
         self.logger.debug("Server is binding at %s", (self.host, port))
         
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -847,18 +848,17 @@ class ThreadedServer:
         self.sock.bind((self.host, port))
 
         self.port = self.sock.getsockname()[1]
-        self.logger.debug("Self port: %d", self.port)
+        if port == 0:
+            self.logger.debug("Self port: %d", self.port)
 
-        self.options = options
-
-        self.peers = list()
+        self.peers = self.options.get("suggested_peers", [])
         peers = self.tracker_manager.notify_start()
-        for ip, pport in peers:
+        for ip, pport in peers: #filters myself
             if ip in ["localhost", utils.get_external_ip()]:
-                if port == pport:
+                if self.port == pport:
                     continue
             self.peers.append((ip, pport))
-            
+        
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
         # creata ad hoc.
@@ -868,7 +868,7 @@ class ThreadedServer:
             num_pieces=self.metainfo.num_pieces
         )
         
-        self.max_peer_connections = 2
+        self.max_peer_connections = 1
         self.active_connections = set()
         
         self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap, self.options)
@@ -883,7 +883,10 @@ class ThreadedServer:
 
         self.mcu.main()
         
-        print(self.peers)
+        print("Available peers:", self.peers)
+        if self.peers == []:
+            self.logger.debug("No peers currently available")
+            return
         
         i = 0
         while i < min(self.max_peer_connections, len(self.peers)):
@@ -967,27 +970,72 @@ class ThreadedServer:
 
 import Fiume.metainfo_decoder as md
 import bencodepy
+import argparse
 
-options = {
-    "torrent_path": pathlib.Path("/home/groucho/torrent/book.pdf.torrent"),
-    "output_file":  pathlib.Path("/home/groucho/torrent/downloads/book.pdf"),
-    "delay": 0,
-    "debug": False,
-    "debug-level": logging.WARNING
-}
+def parser(s=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("torrent_path",
+                        type=pathlib.Path,
+                        help="path to .torrent file")
+
+    parser.add_argument("output_file",
+                        type=pathlib.Path,
+                        help="where to download the file")
+
+    parser.add_argument("-p", "--port",
+                        action="store",
+                        type=int,
+                        default=50146,
+                        help="port for this client")
+
+    parser.add_argument("-v", "--verbosity",
+                        action="count",
+                        default=0,
+                        dest="debug_level",
+                        help="debug level")
+
+    parser.add_argument("--suggested_peers",
+                        action="store",
+                        default=[],
+                        help="suggested_peers")
+
+    parser.add_argument("--delay",
+                        type=float,
+                        default=0,
+                        help="delay for every sent message (only debug)")
+
+    if s:
+        options = vars(parser.parse_args(s))
+    else:
+        options = vars(parser.parse_args())
+        
+    options["debug_level"] = utils.int_to_loglevel(options["debug_level"])
+    options["debug"] = False
+
+    return options
 
 
-with open(options["torrent_path"], "rb") as f:
-    metainfo = md.MetaInfo(
-        bencodepy.decode(f.read()) | options
+if __name__ == "__main__":
+    options = {
+        "torrent_path": pathlib.Path("/home/groucho/torrent/image.jpg.torrent"),
+        "output_file":  pathlib.Path("/home/groucho/torrent/downloads/image.jpg"),
+        "delay": 0,
+        "debug": False,
+        "debug-level": logging.WARNING,
+        "port": 50146,
+        "suggested_peers": [("78.14.24.41", 50144)]
+    }
+
+    with open(options["torrent_path"], "rb") as f:
+        metainfo = md.MetaInfo(
+            bencodepy.decode(f.read()) | options
+        )
+
+    tm = md.TrackerManager(metainfo, options)
+
+    t = ThreadedServer(
+        metainfo, tm,
+        **options
     )
-    
-tm = md.TrackerManager(metainfo, options)
 
-t = ThreadedServer(
-    50146,
-    metainfo, tm,
-    **options
-)
-
-t.main()
+    t.main()

@@ -7,15 +7,13 @@
 #+LATEX_HEADER: \input{$HOME/.emacs.d/latex-preamble.tex}
 
 * Urgent
-** Abilitare ricezione di SCEHDULES
-** A peer must be able to both download and seed, at the same time
-** Make multiple requests for different pieces at the same time
+** Poll every 900sec each tracker for new peers
+** Pip upload
+** CLI
 
 * Not-so-urgent
-** Make an easy-to-use CLI
 ** Implement Fast Extension BEP 6
 https://www.bittorrent.org/beps/bep_0006.html
-** Download from more than one peer concurrently
 ** Reduce the flooding when asking the trackers
 
 * Not-at-all-urgent

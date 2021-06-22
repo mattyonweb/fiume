@@ -62,6 +62,7 @@ class MetaInfo(dict):
 class TrackerManager:
     def __init__(self, metainfo: MetaInfo, options: Dict[str, Any]):
         self.logger = logging.getLogger("TrackManager")
+        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
         self.logger.debug("__init__")
 
         self.options = options
@@ -164,7 +165,7 @@ class TrackerManager:
             self.working_trackers.append(tracker_url)
 
             response_bencode = bencodepy.decode(response)
-            print(tracker_url, response_bencode)
+            
             self.tracker_ids[tracker_url] = (
                 response_bencode[b"tracker id"] if b"tracker id" in response_bencode else b""
             )
@@ -214,7 +215,6 @@ class TrackerManager:
 
         self.logger.debug("Found the following peers: %s", str(peers))
 
-        print(peers)
         return peers
 
     
