@@ -47,6 +47,7 @@ class ConnectionStatus:
 class MasterControlUnit:
     def __init__(self, metainfo, initial_bitmap, cm_queue, options):
         self.logger = logging.getLogger("Master")
+        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
         
         self.metainfo = metainfo
         self.options  = options

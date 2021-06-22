@@ -7,13 +7,19 @@
 #+LATEX_HEADER: \input{$HOME/.emacs.d/latex-preamble.tex}
 
 * Urgent
+** Deal with scenario: peer does not send BITFIELD
 ** Poll every 900sec each tracker for new peers
-** Pip upload
-** CLI
 
 * Not-so-urgent
+** Table with TTL for peers
+Avoid immediate reconnection attempts after a disconnection/failed connection. 
+** Implements DHT
+
 ** Implement Fast Extension BEP 6
 https://www.bittorrent.org/beps/bep_0006.html
-** Reduce the flooding when asking the trackers
+** Reduce the flooding when asking for data to Master
+Instead of asking the master to send a piece through a queue (bear in mind that pieces can be even in the order of magnitude of a megabyte), the master sends the lock for file-reading and each PeerManager acquires and releases this lock autonomously.
+
+The cons of this method is the usual one: if a PeerManager fails to release the lock, the whole program gets deadlocked. Maybe a timer could help (after all, reading 1MB of data from file does not take much)
 
 * Not-at-all-urgent

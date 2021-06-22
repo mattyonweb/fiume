@@ -53,9 +53,9 @@ class PeerManager:
         self.socket, self.address = socket
         self.peer_ip, self.peer_port = self.address
         
-        self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
+        self.logger = logging.getLogger(str(self.peer_ip) + ":" + str(self.peer_port))
         self.logger.setLevel(options.get("debug_level", logging.DEBUG))
-        self.logger.debug("__init__")
+        self.logger.debug("PeerManager __init__()")
                 
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
@@ -143,11 +143,11 @@ class PeerManager:
     
         
     def send_handshake(self):
-        self.logger.debug("Sending HANDSHAKE")
+        self.logger.info("Sending HANDSHAKE")
         self.send_message(MexType.HANDSHAKE)
         self.sent_handshake = True
         if self.received_handshake:
-            self.logger.debug("Sending BITFIELD")
+            self.logger.info("Sending BITFIELD")
             self.send_message(MexType.BITFIELD)
 
 
@@ -156,10 +156,10 @@ class PeerManager:
         assert mex[28:48] == self.metainfo.info_hash
         
         self.received_handshake = True
-        self.logger.debug("Received HANDSHAKE")
+        self.logger.info("Received HANDSHAKE")
         
         if self.sent_handshake:
-            self.logger.debug("Sending BITFIELD")
+            self.logger.info("Sending BITFIELD")
             self.send_message(MexType.BITFIELD)
         else:
             self.send_handshake()        
@@ -208,14 +208,21 @@ class PeerManager:
                 
         except socket.timeout as e:
             self.logger.warning("%s", e)
-            self.logger.warning("Socket time-outed while waiting for messages")
+            self.logger.warning("Socket time-outed while waiting for messages; disconnecting")
             self.send_to_master(utils.M_DISCONNECTED(self.address))
             return
-            # self.queue_in.put(utils.M_KILL("socket time-out"))
+
+        # If connection is abruptly terminated by peer
+        except ConnectionError as e:
+            self.logger.warning("%s", e)
+            self.logger.warning("Generic socket connection error; disconnecting")
+            self.send_to_master(utils.M_DISCONNECTED(self.address))
+            return
+
 
             
     def shutdown(self):
-        self.logger.debug("Shutdown after receiving empty message from peer")
+        self.logger.info("Shutdown after receiving empty message from peer")
         self.send_to_master(utils.M_DISCONNECTED(self.address))
         # self.tracker_manager.notify_completion()
         exit(0)
@@ -258,7 +265,7 @@ class PeerManager:
 
             # TODO: messaggio vuoto b"" = fine scambio o errore di rete
             if mex == b"":
-                print("Shutdown")
+                self.logger.info("Starting PeerManager shutdown...")
                 self.shutdown()
                 break
             
@@ -376,7 +383,10 @@ class PeerManager:
                 *self.deferred_peer_requests[mex.piece_index],
                 deferred=True #important!
             )
-                
+
+        elif isinstance(mex, utils.M_COMPLETED):
+            return
+
         else:
             breakpoint()
             raise Exception("unknown message")
@@ -558,11 +568,6 @@ class PeerManager:
         except Exception as e:
             breakpoint()
             raise e
-
-        # Inform the master that I have requested a new piece"
-        self.send_to_master(
-            utils.M_DEBUG("Requested new piece {piece_idx}", (self.peer_ip, self.peer_port))
-        )
         
         # self.get_piece_size serve per gestire len irregolare dell'ultimo piece
         self.my_progresses[piece_idx] = (b"", self.get_piece_size(piece_idx))
@@ -635,7 +640,7 @@ class PeerManager:
             return
 
         if not self.am_interested:
-            self.logger.warning("Want to ask piece %d, but not interested; sending INTERESTED")
+            self.logger.warning("Want to ask piece %d, but am not interested; sending INTERESTED")
             self.am_interested = True
             self.send_message(MexType.INTERESTED)
             if self.peer_chocking:
@@ -705,12 +710,12 @@ class PeerManager:
                     len(new_data), piece_size
                 )
                 
-            self.logger.debug("Completed download of piece %d", piece_index)
+            self.logger.info("Completed download of piece %d", piece_index)
             
             if not self.verify_hash(piece_index, new_data):
                 raise Exception("Hashes not matching") #TODO
 
-            print("Completed: {:.1f}%".format(
+            self.logger.info("Downloaded: {:.1f}%".format(
                 100 * (1 + sum(int(x) for x in self.my_bitmap)) / len(self.my_bitmap)
             ))
                   
@@ -786,7 +791,6 @@ class PeerManager:
 
             del self.deferred_peer_requests[p_index]
             
-                
         self.send_message(
             MexType.PIECE,
             piece_index=p_index,
@@ -817,7 +821,7 @@ class PeerManager:
             f.write("".join(["1" if piece else "0" for piece in self.my_bitmap]))
 
         if all(self.my_bitmap):
-            self.logger.debug("Download completed!")
+            self.logger.info("Download completed!")
             self.completed = True
             # TODO: esci 
 
@@ -848,13 +852,14 @@ class ThreadedServer:
         self.options = options
 
         self.logger = logging.getLogger("ThreadedServer")
+        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
         self.logger.debug("__init__")
         
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
 
         port = options["port"]
-        self.logger.debug("Server is binding at %s", (self.host, port))
+        self.logger.info("Server is binding at %s", (self.host, port))
         
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -862,7 +867,7 @@ class ThreadedServer:
 
         self.port = self.sock.getsockname()[1]
         if port == 0:
-            self.logger.debug("Self port: %d", self.port)
+            self.logger.info("Self port: %d", self.port)
 
         self.peers = self.options.get("suggested_peers", [])
         peers = self.tracker_manager.notify_start()
@@ -902,9 +907,9 @@ class ThreadedServer:
 
         self.mcu.main()
         
-        print("Available peers:", self.peers)
+        self.logger.debug("Available peers: %s", self.peers)
         if self.peers == []:
-            self.logger.debug("No peers currently available")
+            self.logger.info("No peers currently available")
             return
         
         while not self.is_completed:
@@ -913,15 +918,15 @@ class ThreadedServer:
             while not self.ts_queue_in.empty():
                 mex = self.ts_queue_in.get()
                 if isinstance(mex, utils.M_DISCONNECTED):
-                    self.logger.debug("Disconnected peer %s", mex.sender)
+                    self.logger.info("Disconnected peer %s", mex.sender)
                     self.active_connections.remove(mex.sender)
                 elif isinstance(mex, utils.M_COMPLETED):
                     self.logger.info("Completed download!")
-                    self.completed = True
+                    self.is_completed = True
 
             # If completed dowload, this loop ends; the thread listening
             # for new connections however will remain alive
-            if self.completed:
+            if self.is_completed:
                 break
             
             # If reached max number of connected peers
@@ -933,7 +938,7 @@ class ThreadedServer:
             ip, port = random.choice(self.peers)
             
             if (ip, port) in self.active_connections:
-                self.logger.warning("Chosen an already connected peer, %s", (ip, port))
+                self.logger.warning("Attemping to connect to an already connected peer, %s; abort", (ip, port))
                 time.sleep(1)
                 continue
             
@@ -951,6 +956,8 @@ class ThreadedServer:
                 self.mcu.add_connection_to(peer_manager)
                 self.pms.append(peer_manager)
 
+                self.logger.info("Connected to: %s:%s", ip, port)
+
             except socket.timeout:
                 self.logger.debug("Cannot connect to %s after 5 seconds, abort", (ip, port))
                 continue
@@ -967,7 +974,7 @@ class ThreadedServer:
         
     
     def listen(self):
-        self.logger.debug("Started listening on %s", (self.host, self.port))
+        self.logger.info("Started listening on %s", (self.host, self.port))
         self.logger.debug("Max connections number: %d", self.max_peer_connections)
         
         self.sock.listen(self.max_peer_connections) # Numero massimo di connessioni in attesa (?)

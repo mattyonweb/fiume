@@ -195,12 +195,9 @@ def data_to_bitmap(download_fpath: Path, num_pieces=None) -> List[bool]:
     # Se il file bitmap relativo al torrent NON esiste, allora crealo
     # inserendo tutti 0. Idem se esiste il bitmap file ma non esiste
     # il file scaricato (magari perché è stato eliminato)
-    print("BITMAP:", bitmap_fpath)
-    
     if ((not bitmap_fpath.exists()) or
         (bitmap_fpath.exists() and not download_fpath.exists())):
 
-        print("AOOOOOOOOOOOOOOOOOOo", download_fpath)
         assert num_pieces is not None
         bitmap_fpath.touch()
         
@@ -277,8 +274,6 @@ def get_external_ip():
 
 def int_to_loglevel(n):
     if n == 0:
-        return logging.WARNING
-    if n == 1:
         return logging.INFO
-
+    
     return logging.DEBUG
