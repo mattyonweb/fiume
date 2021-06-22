@@ -1,4 +1,5 @@
 import pathlib
+from Fiume.config import CLIENT_VERSION 
 from setuptools import setup, find_packages
 
 # The directory containing this file
@@ -10,7 +11,7 @@ README = (HERE / "README.md").read_text()
 # This call to setup() does all the work
 setup(
     name="Fiume",
-    version="0.0.0.13",
+    version=".".join(CLIENT_VERSION.decode()),
     description="A Bittorrent client for single-file torrents.",
     long_description=README,
     long_description_content_type="text/markdown",

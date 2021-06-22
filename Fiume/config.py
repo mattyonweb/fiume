@@ -1,6 +1,6 @@
 from pathlib import Path
 
-CLIENT_VERSION = b"0001"
+CLIENT_VERSION = b"0010"
 CLIENT_INFO = b"-FU" + CLIENT_VERSION + b"-"
 
 DOT_DIRECTORY = Path.home() / ".fiume"
