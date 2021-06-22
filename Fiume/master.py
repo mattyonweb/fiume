@@ -265,9 +265,10 @@ class MasterControlUnit:
 
                     
             elif isinstance(mex, M_DISCONNECTED):
-                mapping = self.redistribute_pieces_of(mex.sender)
                 self.send_to(mex.sender, M_KILL())
                 del self.connections[mex.sender]
+
+                mapping = self.redistribute_pieces_of(mex.sender)
 
                 for peer_addr, new_scheduled in mapping.items():
                     self.connections[peer_addr].set_suggested(new_scheduled)                    

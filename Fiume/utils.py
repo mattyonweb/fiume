@@ -272,4 +272,4 @@ def int_to_loglevel(n):
     if n == 1:
         return logging.INFO
 
-    return logging.ERROR
+    return logging.DEBUG

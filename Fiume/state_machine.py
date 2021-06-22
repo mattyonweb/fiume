@@ -54,8 +54,6 @@ class PeerManager:
         # Peer socket
         self.socket, self.address = socket
         self.peer_ip, self.peer_port = self.address
-        # self.peer_ip, self.peer_port = self.socket.getsockname()
-        # self.address = self.socket.getsockname() # TODO
         
         self.logger = logging.getLogger("TO " + str(self.peer_ip) + ":" + str(self.peer_port))
         self.logger.setLevel(options.get("debug_level", logging.DEBUG))
@@ -99,8 +97,9 @@ class PeerManager:
         self.cache_pieces: Dict[int, bytes] = dict()
         self.deferred_peer_requests: Dict[int, Tuple[int, int]] = dict()
         
-        self.max_concurrent_pieces = 4
-        
+        self.max_concurrent_pieces = self.options["max_concurrent_pieces"]
+        self.timeout = self.options["timeout"]
+    
         self.old_messages: List[Tuple[str, bytes]] = list()
         self.completed = False
 
@@ -187,28 +186,36 @@ class PeerManager:
 
         self.queue_in.put(handshake_mex)
         
-        while True:
-            raw_length = self.socket.recv(4)
-            length = int.from_bytes(raw_length, byteorder="big", signed=False)
+        try:
+            while True:
+                raw_length = self.socket.recv(4)
+                length = int.from_bytes(raw_length, byteorder="big", signed=False)
 
-            if length == 0:
-                self.queue_in.put(b"")
-                break
+                if length == 0:
+                    self.queue_in.put(b"")
+                    break
+
+                raw_mex = bytes()
+                while length != 0:
+                    data = self.socket.recv(length)
+                    raw_mex += data
+                    length -= len(data)
+                    if length < 0:
+                        breakpoint()
+                        _ = 0
+                    if length != 0 and self.debug:
+                        print(f"Still waiting for {length} bytes...")
+
+                self.queue_in.put(raw_length + raw_mex)
+                
+        except socket.timeout as e:
+            self.logger.warning("%s", e)
+            self.logger.warning("Socket time-outed while waiting for messages")
+            self.send_to_master(utils.M_DISCONNECTED(self.address))
+            return
+            # self.queue_in.put(utils.M_KILL("socket time-out"))
+
             
-            raw_mex = bytes()
-            while length != 0:
-                data = self.socket.recv(length)
-                raw_mex += data
-                length -= len(data)
-                if length < 0:
-                    breakpoint()
-                    _ = 0
-                if length != 0 and self.debug:
-                    print(f"Still waiting for {length} bytes...")
-
-            self.queue_in.put(raw_length + raw_mex)
-
-    
     def shutdown(self):
         self.logger.debug("Shutdown after receiving empty message from peer")
         self.send_to_master(utils.M_DISCONNECTED(self.address))
@@ -242,6 +249,12 @@ class PeerManager:
 
             # Messagi di controllo (ie. da Master) vengono intoltrati a questa funzione
             if isinstance(mex, utils.MasterMex):
+                # catch early a KILL message
+                if isinstance(mex, utils.M_KILL):
+                    self.logger.debug("[MASTER] Received KILL")
+                    self.send_to_master(utils.M_DEBUG("Got KILLED", self.address))
+                    return
+                
                 self.control_message_interpreter(mex)
                 continue
 
@@ -312,13 +325,8 @@ class PeerManager:
             
     def control_message_interpreter(self, mex: utils.MasterMex):
         self.logger.debug("[MASTER] Received message %s", str(type(mex)))
-        
-        if isinstance(mex, utils.M_KILL):
-            self.logger.debug("[MASTER] Received KILL from master")
-            self.send_to_master(utils.M_DEBUG("Got KILLED", self.address))
-            return # TODO
-        
-        elif isinstance(mex, utils.M_DEBUG):
+            
+        if isinstance(mex, utils.M_DEBUG):
             self.logger.debug("[MASTER] Received DEBUG message from master: %s", mex.data)
             self.send_to_master(utils.M_DEBUG("Got DEBUGGED", self.address))
             return
@@ -343,6 +351,7 @@ class PeerManager:
         elif isinstance(mex, utils.M_NEW_HAVE):
             self.logger.debug("[MASTER] Received NEW_HAVE message from master: %s", mex.piece_index)
             self.my_bitmap[mex.piece_index] = True
+            self.send_message(MexType.HAVE, piece_index=mex.piece_index)
             return        
 
         # M_Piece has a bit complicated workflow.
@@ -691,7 +700,13 @@ class PeerManager:
                                 
         new_data = old_data + piece_payload
         
-        if len(new_data) == piece_size:
+        if len(new_data) >= piece_size:
+            if len(new_data) > piece_size:
+                self.error.debug(
+                    "Received more data then the expected size: %d, while expected %d",
+                    len(new_data), piece_size
+                )
+                
             self.logger.debug("Completed download of piece %d", piece_index)
             
             if not self.verify_hash(piece_index, new_data):
@@ -830,7 +845,7 @@ class PeerManager:
 # il quale si occuperà di gestire lo scambio di messaggi
 class ThreadedServer:
     def __init__(self, metainfo, tracker_manager, **options):
-        self.host = "localhost"
+        self.host, self.public_ip = "localhost", utils.get_external_ip()
         self.peer = None
         self.options = options
 
@@ -854,7 +869,7 @@ class ThreadedServer:
         self.peers = self.options.get("suggested_peers", [])
         peers = self.tracker_manager.notify_start()
         for ip, pport in peers: #filters myself
-            if ip in ["localhost", utils.get_external_ip()]:
+            if ip in ["localhost", self.public_ip]:
                 if self.port == pport:
                     continue
             self.peers.append((ip, pport))
@@ -867,8 +882,9 @@ class ThreadedServer:
             self.options["output_file"],
             num_pieces=self.metainfo.num_pieces
         )
-        
-        self.max_peer_connections = 1
+
+        self.timeout = self.options["timeout"]
+        self.max_peer_connections = self.options["max_peer_connections"]
         self.active_connections = set()
         
         self.mcu = master.MasterControlUnit(self.metainfo, self.global_bitmap, self.options)
@@ -890,6 +906,7 @@ class ThreadedServer:
         
         i = 0
         while i < min(self.max_peer_connections, len(self.peers)):
+            
             ip, port = random.choice(self.peers)
             self.logger.debug("Chosen peer: %s:%s", ip, port)
             
@@ -899,7 +916,7 @@ class ThreadedServer:
                 continue
             
             if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
-                self.logger.debug("Attempting to connect to myself (%s): abort", (ip, port))
+                self.logger.warning("Attempting to connect to myself (%s): abort", (ip, port))
                 time.sleep(2)
                 continue
 
@@ -910,7 +927,11 @@ class ThreadedServer:
                 self.mcu.add_connection_to(peer_manager)
                 self.pms.append(peer_manager)
                 i += 1
-                
+
+            except socket.timeout:
+                self.logger.debug("Cannot connect to %s after 5 seconds, abort", (ip, port))
+                continue
+            
             except Exception as e:
                 self.logger.error("%s", e)
                 time.sleep(2)
@@ -947,9 +968,14 @@ class ThreadedServer:
 
             
     def connect_as_client(self, ip, port, queues: Tuple[Queue, Queue]):
-        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM) 
-        new_socket.connect((ip, port))
+        # new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # new_socket.settimeout(5) # 5 seconds before abort attempt to connect
+        # new_socket.connect((ip, port))
+        # new_socket.settimeout(None) # remove timeout of before
 
+        new_socket = socket.create_connection((ip, port), timeout=self.timeout)
+        new_socket.settimeout(self.timeout)
+        
         self.logger.debug("Actively connecting to %s", (ip, port))
         
         newPeer = PeerManager(
@@ -993,6 +1019,19 @@ def parser(s=None):
                         default=0,
                         dest="debug_level",
                         help="debug level")
+    
+    parser.add_argument("-t", "--timeout",
+                        action="store",
+                        default=10,
+                        type=int,
+                        help="max num of concurrent connections")
+    
+    parser.add_argument("--max-peer-connections",
+                        action="store",
+                        default=2,
+                        type=int,
+                        dest="max_peer_connections",
+                        help="max num of concurrent connections")
 
     parser.add_argument("--suggested_peers",
                         action="store",
@@ -1010,20 +1049,26 @@ def parser(s=None):
         options = vars(parser.parse_args())
         
     options["debug_level"] = utils.int_to_loglevel(options["debug_level"])
+    options["max_peer_connections"] = int(options["max_peer_connections"])
+    options["timeout"] = int(options["timeout"])
     options["debug"] = False
 
+    print(options)
+    
     return options
 
 
 if __name__ == "__main__":
     options = {
-        "torrent_path": pathlib.Path("/home/groucho/torrent/image.jpg.torrent"),
-        "output_file":  pathlib.Path("/home/groucho/torrent/downloads/image.jpg"),
+        "torrent_path": pathlib.Path("/home/groucho/The Fanimatrix Run Program Full Release.torrent"),
+        "output_file":  pathlib.Path("/home/groucho/torrent/downloads/video"),
         "delay": 0,
         "debug": False,
-        "debug-level": logging.WARNING,
+        "debug_level": logging.DEBUG,
         "port": 50146,
-        "suggested_peers": [("78.14.24.41", 50144)]
+        "suggested_peers": [],
+        "max_peer_connections": 2,
+        "timeout": 15,
     }
 
     with open(options["torrent_path"], "rb") as f:
