@@ -10,17 +10,6 @@ import tempfile
 from Fiume.utils import *
 import Fiume.master as master
 
-def repeat(times):
-    def repeatHelper(f):
-        def callHelper(*args):
-            for diocane in range(0, times):
-                f(*args)
-
-        return callHelper
-
-    return repeatHelper
-
-
 class PeerHasEverything(unittest.TestCase):
 
     def setUp(self):
@@ -39,6 +28,8 @@ class PeerHasEverything(unittest.TestCase):
             download_fpath=Path(self.file.name),
             pieces_hash = self.hashes
         )
+
+        self.tracker_manager = Mock()
         
         self.peer  = Mock(address=("localhost", 50154), queue_in=Queue())
         self.peer2 = Mock(address=("localhost", 50155), queue_in=Queue())
@@ -50,6 +41,7 @@ class PeerHasEverything(unittest.TestCase):
             self.metainfo,
             self.initial_bitmap,
             Queue(), 
+            self.tracker_manager,
             {"download_fpath": Path("/dev/null")}
         )
         self.mcu.main()
@@ -305,7 +297,7 @@ class PeerHasEverything(unittest.TestCase):
         completed = self.get_mex(self.peer, timeout=1)
         self.assertIsInstance(completed, M_COMPLETED)
         self.assertIsInstance(self.mcu.queue_connection_manager.get(), M_COMPLETED)
-
+        self.tracker_manager.notify_completion.assert_called()
         
     def test_completed_but_exists_peer_with_missing_pieces(self):
         """ 
@@ -343,3 +335,5 @@ class PeerHasEverything(unittest.TestCase):
         m = self.get_mex(self.peer2)
         self.assertIsInstance(m, M_PIECE)
         self.assertEqual(m.data, self.data[99])
+
+        self.tracker_manager.notify_completion.assert_called()

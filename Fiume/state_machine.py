@@ -224,7 +224,6 @@ class PeerManager:
     def shutdown(self):
         self.logger.info("Shutdown after receiving empty message from peer")
         self.send_to_master(utils.M_DISCONNECTED(self.address))
-        # self.tracker_manager.notify_completion()
         exit(0)
 
     
@@ -863,6 +862,7 @@ class ThreadedServer:
         
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # self.sock.bind(("192.168.1.116", port))
         self.sock.bind((self.host, port))
 
         self.port = self.sock.getsockname()[1]
@@ -894,7 +894,8 @@ class ThreadedServer:
         self.ts_queue_in = Queue()
         self.mcu = master.MasterControlUnit(
             self.metainfo, self.global_bitmap,
-            self.ts_queue_in, self.options
+            self.ts_queue_in, self.tracker_manager,
+            self.options
         )
         self.master_queue = self.mcu.get_master_queue()
 

@@ -45,12 +45,14 @@ class ConnectionStatus:
 
         
 class MasterControlUnit:
-    def __init__(self, metainfo, initial_bitmap, cm_queue, options):
+    def __init__(self, metainfo, initial_bitmap, cm_queue, tracker_manager, options):
         self.logger = logging.getLogger("Master")
         self.logger.setLevel(options.get("debug_level", logging.DEBUG))
         
         self.metainfo = metainfo
+        self.tracker_manager = tracker_manager
         self.options  = options
+        
         self.bitmap: List[bool] = initial_bitmap
         
         self.connections: Dict[Address, ConnectionStatus] = dict()
@@ -254,10 +256,12 @@ class MasterControlUnit:
                 # have completed the download. The peers will decide if mantaining the
                 # connection and seed, or to disconnect
                 if all(self.bitmap):
+                    self.tracker_manager.notify_completion()
                     self.send_all(M_COMPLETED())
                     self.queue_connection_manager.put(M_COMPLETED())
+                    
                     print("Completed download!")
-
+                    
                     
             elif isinstance(mex, M_DISCONNECTED):
                 self.logger.debug("Received disconnect from %s", mex.sender)

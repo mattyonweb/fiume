@@ -9,8 +9,13 @@
 * Urgent
 ** Deal with scenario: peer does not send BITFIELD
 ** Poll every 900sec each tracker for new peers
+** Better re-distribuition algorithm
 
 * Not-so-urgent
+** Implement rarest-first download strategy
+
+** Magnet Links
+
 ** Table with TTL for peers
 Avoid immediate reconnection attempts after a disconnection/failed connection. 
 ** Implements DHT
@@ -23,3 +28,4 @@ Instead of asking the master to send a piece through a queue (bear in mind that 
 The cons of this method is the usual one: if a PeerManager fails to release the lock, the whole program gets deadlocked. Maybe a timer could help (after all, reading 1MB of data from file does not take much)
 
 * Not-at-all-urgent
+** WRite in README infos about .fiume folder
