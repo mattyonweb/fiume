@@ -6,11 +6,14 @@ from typing import *
 from typing.io import *
 from pathlib import Path
 from dataclasses import dataclass
+from threading import Event
 
 import enum
 import Fiume.config as config
 
 Address = Tuple[str, int]
+
+THE_TERMINATOR = Event()
 
 #######################################à
 

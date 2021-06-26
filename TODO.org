@@ -7,11 +7,15 @@
 #+LATEX_HEADER: \input{$HOME/.emacs.d/latex-preamble.tex}
 
 * Urgent
+** Implements multiple torrents download
+
 ** Deal with scenario: peer does not send BITFIELD
 ** Poll every 900sec each tracker for new peers
 ** Better re-distribuition algorithm
 
 * Not-so-urgent
+** In ThreadServer, retry every XXXsec to connect to a previously unreachable or disconnected peer
+
 ** Implement rarest-first download strategy
 
 ** Magnet Links

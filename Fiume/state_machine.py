@@ -13,6 +13,7 @@ from typing import *
 
 import Fiume.utils as utils
 import Fiume.master as master
+import Fiume.ttl as ttl
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -175,11 +176,16 @@ class PeerManager:
     def initialize_file(self, fpath: pathlib.Path):
         """ Initialize the download file """
         if not fpath.exists():
-            # TODO: BUG quando ad es. il file è /a/b/c/d.txt ma
-            # le cartelle b e c non esistono
+            # Es. se path è /a/b/c/d.jpg ma b,c,d non
+            # esistono, creale
+            if not fpath.parent.exists():
+                fpath.parent.mkdir(parents=True)
+
             fpath.touch()
+
             with open(fpath, "wb") as f:
                 f.write(bytes(self.metainfo.num_pieces))
+
             return fpath
 
         return fpath
@@ -377,7 +383,9 @@ class PeerManager:
             # start downloading the received piece(s);
             # if we were downloading pieces already, simply start one of the
             # new pieces (if we are not > max_concurrent_pieces
-            self.ask_for_new_pieces()
+            if self.scheduled != []: # TODO pensa se può funzionare
+                self.ask_for_new_pieces()
+
             return
 
         
@@ -398,7 +406,7 @@ class PeerManager:
             self.cache_pieces[mex.piece_index] = mex.data
 
             if mex.piece_index not in self.deferred_peer_requests:
-                # Should not happend
+                # Should not happen
                 self.logger.warning(
                     "Received piece %d from master, but we never deferred its sending!",
                     mex.piece_index
@@ -410,7 +418,7 @@ class PeerManager:
                 mex.piece_index,
                 *self.deferred_peer_requests[mex.piece_index],
                 deferred=True #important!
-            )
+            )        
 
         if isinstance(mex, utils.M_COMPLETED):
             self.logger.info("Received COMPLETED message from Master")
@@ -429,8 +437,13 @@ class PeerManager:
         """
         if "delay" in self.options: # only for debug
             time.sleep(self.options["delay"])
-        self.socket.sendall(self.make_message(mexType, **kwargs))
 
+        try:
+            self.socket.sendall(self.make_message(mexType, **kwargs))
+        except IOError as e:
+            self.logger.warning("%s", e)
+            self.logger.warning("Shutting down after peer abroupt disconnection")
+            self.shutdown()
         
     def make_message(self, mexType: MexType, **kwargs) -> bytes:
         """
@@ -501,8 +514,7 @@ class PeerManager:
             num_pieces=self.metainfo.num_pieces
         )
 
-        # Pretty print bitmaps
-        if len(self.my_bitmap) < 80:
+        if len(self.my_bitmap) < 120:
             utils.pprint_bitmap(self.my_bitmap, "self")
             utils.pprint_bitmap(self.peer_bitmap, "peer")
 
@@ -515,7 +527,10 @@ class PeerManager:
                 self.am_interested_in.append(i)
 
         # Informs master of peer's bitmap
-        self.logger.debug("[MASTER] Sending M_PEER_HAS to master")
+        self.logger.debug(
+            "[MASTER] Sending M_PEER_HAS to master, requesting schedule of %d pieces",
+            self.max_concurrent_pieces+1
+        )
         self.send_to_master(
             utils.M_PEER_HAS(
                 self.am_interested_in,
@@ -607,8 +622,8 @@ class PeerManager:
             if len(self.scheduled) == 0:
                 self.logger.debug("No pieces pending!")
             self.logger.debug("Nothing to be interested in")
-            self.logger.debug("Sending NOT-INTERESTED message")
             if self.am_interested:
+                self.logger.debug("Since am interested: sending NOT-INTERESTED message")
                 self.am_interested = False
                 self.send_message(MexType.NOT_INTERESTED)
             return
@@ -659,11 +674,11 @@ class PeerManager:
         if self.peer_chocking:
             self.logger.debug("Wanted to request a piece, but am choked")
             return
-
-        # If no incompleted piece, simply ask new pieces.
-        if len(self.my_progresses) == 0: 
-            return self.ask_for_new_pieces()
-
+        
+        if len(self.my_progresses) == 0: # se non ci sono pezzi incompleti
+            self.ask_for_new_pieces()
+            return
+            
         if len(self.my_progresses) > self.max_concurrent_pieces:
             self.logger.debug("Already topping max concurrent requests")
             return
@@ -724,7 +739,7 @@ class PeerManager:
         if piece_offset < len(old_data):
             self.logger.warning("Duplicate block, received offset %d but expecting %d",
                                 piece_offset, len(old_data))
-            return # TODO: ?
+            return
                                 
         self.logger.debug("Received payload for piece %d offset %d length %d: %s...%s",
                           piece_index, piece_offset, len(piece_payload),
@@ -742,6 +757,7 @@ class PeerManager:
             self.logger.info("Completed download of piece %d", piece_index)
             
             if not self.verify_hash(piece_index, new_data):
+                self.logger.critical("Hashes for %d don't match", piece_index)
                 raise Exception("Hashes not matching") #TODO
 
             self.logger.info("Downloaded: {:.1f}%".format(
@@ -827,8 +843,6 @@ class PeerManager:
             piece_length=p_length
         )
 
-        
-        # TODO: revisione di queste due righe
         # TODO: rendile una funzione, da chiamare ad ogni invio di piece
         if p_index in self.peer_progresses:
             (old_partial, old_total) = self.peer_progresses[p_index]
@@ -852,7 +866,9 @@ class PeerManager:
         if all(self.my_bitmap):
             self.logger.info("Download completed!")
             self.completed = True
-            # TODO: esci 
+            # If peers has too all the pieces, shutdown
+            if all(bool(int(x)) for x in self.peer_bitmap):
+                self.shutdown()
 
         
     def verify_hash(self, piece_index: int, data: bytes):
@@ -870,7 +886,8 @@ class PeerManager:
 
 
 #################################ÀÀ
-       
+
+
 # Questo oggetto gestisce le connessioni entrambi.
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
@@ -918,7 +935,7 @@ class ThreadedServer:
         # Viene letta da un file salvato in sessioni precedenti, oppure
         # creata ad hoc.
         # TODO: serve davvero, qui? Spostare in metainfo?
-        self.global_bitmap: List[bool] = utils.data_to_bitmap(
+        self.initial_bitmap: List[bool] = utils.data_to_bitmap(
             self.options["output_file"],
             num_pieces=self.metainfo.num_pieces
         )
@@ -926,21 +943,21 @@ class ThreadedServer:
         self.timeout = self.options["timeout"]
         self.max_peer_connections = self.options["max_peer_connections"]
         self.active_connections = set()
-        self.is_completed = all(bool(int(x)) for x in self.global_bitmap)
+        self.is_completed = all(bool(int(x)) for x in self.initial_bitmap)
 
         self.ts_queue_in = Queue()
         self.mcu = master.MasterControlUnit(
-            self.metainfo, self.global_bitmap,
+            self.metainfo, self.initial_bitmap,
             self.ts_queue_in, self.tracker_manager,
             self.options
         )
         self.master_queue = self.mcu.get_master_queue()
 
-        self.pms = list()
-
-        
+        self.ttl_peer_table = ttl.TTL_table()
+    
     def main(self):       
         socket_listen_t = threading.Thread(target=self.listen)
+        socket_listen_t.daemon = True
         socket_listen_t.start()        
 
         self.mcu.main()
@@ -949,17 +966,38 @@ class ThreadedServer:
         if self.peers == set():
             self.logger.info("No peers currently available")
             return
-        
+
+        # Connects to every peer who allows me to connect
+        if not self.is_completed:
+            print("AOOOOOOOOOOOOOOOOOOOOOOOOO")
+            for ip, port in self.peers:
+                queues = Queue(), self.master_queue
+                self.connect_as_client(ip, port, queues)
+            
+            
         while not self.is_completed:
             # Peek in the queue, to see if any peer has disconnected
             # or we have completed
             while not self.ts_queue_in.empty():
                 mex = self.ts_queue_in.get()
-                
+
                 if isinstance(mex, utils.M_DISCONNECTED):
                     self.logger.info("Disconnected peer %s", mex.sender)
                     self.active_connections.remove(mex.sender)
-                    
+
+                    self.logger.debug("Inserting %s in ttl table with ttl=%d",
+                                      mex.sender, 2 * self.timeout)
+                    self.ttl_peer_table.add(mex.sender, 2 * self.timeout) # TODO timeout
+
+                    # try to connect to any known peer, which did not
+                    # recently disconnected from us
+                    if self.ttl_peer_table.any_ready():
+                        (new_ip, new_port) = self.ttl_peer_table.extract(n=1)
+                        self.connect_as_client(
+                            new_ip, new_port,
+                            (Queue(), self.master_queue)
+                        )
+
                 elif isinstance(mex, utils.M_COMPLETED):
                     self.logger.info("Completed download!")
                     self.is_completed = True
@@ -973,53 +1011,70 @@ class ThreadedServer:
             # If completed dowload, this loop ends; the thread listening
             # for new connections however will remain alive
             if self.is_completed:
+                self.tracker_manager.notify_completion()
                 break
 
-            print(self.peers)
-            
-            # If reached max number of connected peers
-            if len(self.active_connections) >= min(self.max_peer_connections, len(self.peers)):
-                self.logger.debug("Max peer connections, sleeping 5sec")
-                time.sleep(5)
-                continue
-            
-            ip, port = random.choice(list(self.peers))
-            
-            if (ip, port) in self.active_connections:
-                self.logger.warning("Attemping to connect to an already connected peer, %s; abort", (ip, port))
-                time.sleep(1)
-                continue
-            
-            if ip == self.host or port == self.port: #TODO: sbagliato, peer può usare mia stessa porta
-                self.logger.warning("Attempting to connect to myself (%s): abort", (ip, port))
-                time.sleep(1)
-                continue
-            
-            try:
-                self.logger.debug("Trying to connect to: %s:%s", ip, port)
-                
-                queues = (Queue(), self.master_queue)
-                peer_manager = self.connect_as_client(ip, port, queues)
-                self.active_connections.add((ip, port))
-                self.mcu.add_connection_to(peer_manager)
-                self.pms.append(peer_manager)
-
-                self.logger.info("Connected to: %s:%s", ip, port)
-
-            except socket.timeout:
-                self.logger.debug("Cannot connect to %s after 5 seconds, abort", (ip, port))
-                continue
-            except ConnectionRefusedError as e:
-                self.logger.debug("%s", e)
-                time.sleep(1)
-                continue
-            except Exception as e:
-                self.logger.error("%s", e)
-                raise e
-
+            if len(self.active_connections) == 0:                
+                if self.ttl_peer_table.any_ready():
+                    (new_ip, new_port) = self.ttl_peer_table.extract(n=1)
+                    self.logger.debug("Found a peer to wake %s", (new_ip, new_port))
+                                        
+                    self.connect_as_client(
+                        new_ip, new_port,
+                        (Queue(), self.master_queue)
+                    )
+                    time.sleep(1)
+                else:
+                    self.logger.debug("No active connections while download is incomplete; 5 second sleep")
+                    time.sleep(5)
+                    
+                    
         self.logger.info("Completed download, now in seed-listening phase") 
-        socket_listen_t.join()
+
+        # socket_listen_t.join()
         
+            
+    def connect_as_client(self, ip, port, queues: Tuple[Queue, Queue]):
+        try:
+            new_socket = socket.create_connection((ip, port), timeout=self.timeout)
+            new_socket.settimeout(self.timeout)
+            
+            new_peer = PeerManager(
+                (new_socket, (ip, port)),
+                self.metainfo, self.tracker_manager,
+                queues,
+                self.initial_bitmap, self.options,
+                Initiator.SELF)
+            
+            self.logger.info("Connected to: %s:%s", ip, port)
+            
+        except socket.timeout:
+            self.logger.debug("Cannot connect to %s after %d seconds, abort", (ip, port), self.timeout)
+            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), self.timeout*2)
+            self.ttl_peer_table.add((ip, port), self.timeout*2)
+            return
+        
+        except ConnectionRefusedError as e:
+            self.logger.debug("%s: %s", (ip, port), e)
+            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), self.timeout*2)
+            self.ttl_peer_table.add((ip, port), self.timeout*2)
+            return
+        
+        except Exception as e:
+            self.logger.error("%s: %s", (ip, port), e)
+            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), self.timeout*2)
+            self.ttl_peer_table.add((ip, port), self.timeout*2)
+            raise e
+
+        t = threading.Thread(target = new_peer.main)
+        t.daemon = True
+        t.start()
+        
+        self.active_connections.add((ip, port))
+        self.mcu.add_connection_to(new_peer)
+
+        # return newPeer
+
     
     def listen(self):
         self.logger.info("Started listening on %s", (self.host, self.port))
@@ -1037,38 +1092,29 @@ class ThreadedServer:
                 self.metainfo,
                 self.tracker_manager,
                 (Queue(), self.master_queue),
-                self.global_bitmap,
+                self.initial_bitmap,
                 self.options,
                 Initiator.OTHER
             )
 
             self.active_connections.add(address)
             self.mcu.add_connection_to(new_peer)
-            self.pms.append(new_peer)
             
             t = threading.Thread(target = new_peer.main)
+            t.daemon = True
             t.start()
 
-            
-    def connect_as_client(self, ip, port, queues: Tuple[Queue, Queue]):
-        new_socket = socket.create_connection((ip, port), timeout=self.timeout)
-        new_socket.settimeout(self.timeout)
+    def check_suspension(self):
+        while True:
+            if self.terminator.is_set():
+                break
+            time.sleep(1)
+        self.shutdown_all()
         
-        self.logger.debug("Actively connecting to %s", (ip, port))
-        
-        newPeer = PeerManager(
-            (new_socket, (ip, port)),
-            self.metainfo,
-            self.tracker_manager,
-            queues,
-            self.global_bitmap,
-            self.options,
-            Initiator.SELF
-        )
-
-        t = threading.Thread(target = newPeer.main)
-        t.start()            
-        return newPeer
+    def shutdown_all(self):
+        self.logger.warning("SHUTTING DOWN ALL, CAREFULLY")
+        self.tracker_manager.notify_stop()
+        sys.exit(0)
 
 ###############################
 

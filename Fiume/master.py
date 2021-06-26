@@ -213,8 +213,9 @@ class MasterControlUnit:
                 # TODO: assert su lungehzza data
                 f.seek(piece_index * self.metainfo.piece_size)
                 f.write(data)
+                f.flush()
 
-                
+                    
     def read_piece_from_file(self, piece_index) -> bytes:
         """
         Reads an entire piece from the downloaded file.
@@ -256,7 +257,6 @@ class MasterControlUnit:
                 # have completed the download. The peers will decide if mantaining the
                 # connection and seed, or to disconnect
                 if all(self.bitmap):
-                    self.tracker_manager.notify_completion()
                     self.send_all(M_COMPLETED())
                     self.queue_connection_manager.put(M_COMPLETED())
                     

@@ -2,10 +2,12 @@ import argparse
 import pathlib
 import logging
 import bencodepy
+import signal
 
 import Fiume.metainfo_decoder as md
 import Fiume.state_machine as sm
 import Fiume.fiume as fm
+import Fiume.utils as utils
 
 ##################################################
 
@@ -20,12 +22,11 @@ def main_single():
     tm = md.TrackerManager(metainfo, options)
 
     t = sm.ThreadedServer(
-        metainfo, tm,
+        metainfo, tm, 
         **options
     )
 
-    t.main()
-
+    
 def main_multiple():
     options = sm.parser()
 

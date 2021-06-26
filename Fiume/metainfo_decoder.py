@@ -122,9 +122,15 @@ class TrackerManager:
         if self.bitmap_file.exists():
             with open(self.bitmap_file, "r") as f:
                 bitmap = [int(c) for c in f.read().strip()]
+                
+                if bitmap == []:
+                    self.logger.error("Bitmap file is empty and corrupted.")
+                    raise Exception("Bitmap file is empty and corrupted")
+
                 downloaded = sum(bitmap[:-1]) * self.metainfo.piece_size
                 if bitmap[-1]:
                     downloaded += self.metainfo.total_size % self.metainfo.piece_size
+
                 uploaded   = 0 # TODO
                 left       = self.metainfo.total_size - downloaded
         else: # First connection 

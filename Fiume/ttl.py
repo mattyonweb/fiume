@@ -8,12 +8,19 @@ class TTL_table:
         self.available: Queue = Queue()
 
     def add(self, obj: Hashable, ttl: int, starting_time: int=None):
+        """ 
+        Adds an object to the TTL table
+        """
         if starting_time is None:
             starting_time = int(time.time())
 
         self.ttl[obj] = starting_time + ttl
 
+        
     def _update_available(self) -> bool:
+        """
+        Private method. Checks for timeouts in the table.
+        """
         current_time = int(time.time())
 
         to_delete = list()
@@ -25,11 +32,22 @@ class TTL_table:
         for obj in to_delete:
             del self.ttl[obj]
 
-    def any_ready(self):
+            
+    def any_ready(self) -> bool:
+        """
+        Returns whether there is any available (aka. expired) object.
+        """
         self._update_available()
         return not self.available.empty()
 
-    def extract(self, n=1, blocking=True, timeout=1) -> List[Any]:
+    
+    def extract(self, n=1, blocking=True, timeout=None) -> List[Any]:
+        """
+        Extracts n objects from the expired set. 
+        
+        If blocking is True, waits (perhaps for `timeout` seconds) for 
+        the queue to be filled up.
+        """
         self._update_available()
         out = list()
         
