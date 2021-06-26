@@ -44,7 +44,8 @@ class MetaInfo(dict):
         self.num_pieces: int = len(self.pieces_hash)
 
         self.download_fpath: Path = self["output_file"]
-                
+        self.human_name: str = self.download_fpath.name[:4] + ".torr"
+
     def __gather_trackers(self) -> List[Url]:
         """ Unites all possible trackers in a single list, useless """
         trackers = [self[b"announce"]]
@@ -61,14 +62,17 @@ class MetaInfo(dict):
 
 class TrackerManager:
     def __init__(self, metainfo: MetaInfo, options: Dict[str, Any]):
-        self.logger = logging.getLogger("TrackManager")
+        self.options = options
+        self.bitmap_file = utils.get_bitmap_file(self.options["output_file"])
+        self.metainfo: MetaInfo = metainfo
+
+        self.logger = logging.getLogger(
+            "TrackManager - {}".format(self.metainfo.human_name)
+        )
         self.logger.setLevel(options.get("debug_level", logging.DEBUG))
         self.logger.debug("__init__")
 
-        self.options = options
-        self.bitmap_file = utils.get_bitmap_file(self.options["output_file"])
         
-        self.metainfo: MetaInfo = metainfo
         self.working_trackers: List[str] = list()
 
         self.peer_id = config.CLIENT_INFO + random.randbytes(12)

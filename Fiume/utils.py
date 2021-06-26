@@ -112,7 +112,7 @@ class M_DISCONNECTED(MasterMex):
     Used when PM has disconnected gracefully (and not?).
     """
     sender: Tuple[str, int]
-
+    reason: Union[str, None] = None
     
 @dataclass
 class M_COMPLETED(MasterMex):
@@ -277,3 +277,9 @@ def int_to_loglevel(n):
         return logging.INFO
     
     return logging.DEBUG
+
+def pprint_bitmap(bitmap: List[bool], who="my"):
+    print(who, end=" |")
+    for my in bitmap:
+        print("+" if my else " ", end="")
+    print()

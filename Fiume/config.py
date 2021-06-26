@@ -11,3 +11,6 @@ BITMAPS_DIR = DOT_DIRECTORY / "bitmaps"
 if not BITMAPS_DIR.exists():
     Path.mkdir(BITMAPS_DIR)
 
+IN_DOWNLOAD_FILE = DOT_DIRECTORY / "downloading.json"
+if not IN_DOWNLOAD_FILE.exists():
+    IN_DOWNLOAD_FILE.touch()

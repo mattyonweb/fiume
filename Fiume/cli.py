@@ -5,10 +5,11 @@ import bencodepy
 
 import Fiume.metainfo_decoder as md
 import Fiume.state_machine as sm
+import Fiume.fiume as fm
 
 ##################################################
 
-def main():
+def main_single():
     options = sm.parser()
     
     with open(options["torrent_path"], "rb") as f:
@@ -25,5 +26,11 @@ def main():
 
     t.main()
 
+def main_multiple():
+    options = sm.parser()
+
+    app = fm.Fiume(options)
+    app.begin_session()
+    
 # if __name__ == "__main__":
 #     main()

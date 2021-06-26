@@ -33,7 +33,8 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "fiume=Fiume.cli:main",
+            "fiume-single=Fiume.cli:main_single",
+            "fiume=Fiume.cli:main_multiple",
         ]
     },
     python_requires='>=3.9',

@@ -42,6 +42,17 @@ class Initiator(enum.Enum):
 
 
 class PeerManager:
+    """
+    PeerManager manages the connection with a single peer. It embedds
+    the logic for the peer-to-peer .torrent protocol. 
+
+    It works under the directions of a MasterControlUnit instance which
+    decides, among others, what pieces to download. This is needed, as
+    a ThreadedServer will download files from many peers concurrently, and
+    a central coordination is needed. Communications with the MasterControlUnit
+    happen through a Queue.
+    """
+    
     def __init__(self, socket: Tuple,
                  metainfo, tracker_manager,
                  master_queues: Tuple[Queue, Queue],
@@ -52,14 +63,17 @@ class PeerManager:
         # Peer socket
         self.socket, self.address = socket
         self.peer_ip, self.peer_port = self.address
-        
-        self.logger = logging.getLogger(str(self.peer_ip) + ":" + str(self.peer_port))
-        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
-        self.logger.debug("PeerManager __init__()")
                 
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
 
+        self.logger = logging.getLogger(
+            "[{}] {}:{}".format(self.metainfo.human_name, self.peer_ip, self.peer_port)
+        )
+        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
+        self.logger.debug("PeerManager __init__()")
+
+        
         self.options = options
         self.debug = False
         if "debug" in self.options:
@@ -103,12 +117,17 @@ class PeerManager:
 
         
     def main(self):
+        """
+        The entry point for this class. It starts the interaction with
+        a peer.
+        """
         self.logger.debug("main")
 
         t1 = threading.Thread(target=self.message_socket_receiver)
         t1.start()
         
-        # Stabilisce chi fra i due peers dovrà inviare il primo messaggio
+        # Depending on who initiated the connection, either me or my peer
+        # will send the first message of the HANDSHAKE
         if self.initiator == Initiator.SELF:
             self.send_handshake()
 
@@ -120,29 +139,12 @@ class PeerManager:
         Sends a message to the master's queue.
         """
         self.queue_to_master.put(mex)
-
-        
-    def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
-        """
-        Reads data at a given offset from the cache. Used when peer
-        asks me for a piece.
-
-        If piece is not in cache, raise an exception (it should never happen! 
-        every time you call read_data, data must be entered in cache!)
-        """
-        if piece_length == 0:
-            piece_length = self.get_piece_size(piece_index)
-
-        if piece_index not in self.cache_pieces:
-            breakpoint()
-            raise Exception(f"Don't have piece {piece_index} in cache!")
-
-        piece = self.cache_pieces[piece_index]
-        return piece[piece_offset:piece_offset+piece_length]
-
-    
+   
         
     def send_handshake(self):
+        """
+        Sends the first message of the HANDSHAKE.
+        """
         self.logger.info("Sending HANDSHAKE")
         self.send_message(MexType.HANDSHAKE)
         self.sent_handshake = True
@@ -152,8 +154,12 @@ class PeerManager:
 
 
     def receive_handshake(self, mex):
-        # Handshake ricevuta è corretta (info_hash matchano)
-        assert mex[28:48] == self.metainfo.info_hash
+        """
+        Handles a HANDSHAKE message received. 
+        """
+        if not mex[28:48] == self.metainfo.info_hash: # TODO
+            self.shutdown(reason="InfoHash received during HANDSHAKE different from expected!")
+            return
         
         self.received_handshake = True
         self.logger.info("Received HANDSHAKE")
@@ -179,12 +185,11 @@ class PeerManager:
 
                                      
     # Thread a sé stante
-    def message_socket_receiver(self):
-        handshake_mex = self.socket.recv(68)
-
-        self.queue_in.put(handshake_mex)
-        
+    def message_socket_receiver(self):        
         try:
+            handshake_mex = self.socket.recv(68)
+            self.queue_in.put(handshake_mex)
+
             while True:
                 raw_length = self.socket.recv(4)
                 length = int.from_bytes(raw_length, byteorder="big", signed=False)
@@ -208,22 +213,20 @@ class PeerManager:
                 
         except socket.timeout as e:
             self.logger.warning("%s", e)
-            self.logger.warning("Socket time-outed while waiting for messages; disconnecting")
-            self.send_to_master(utils.M_DISCONNECTED(self.address))
+            self.shutdown(reason="Socket time-outed while waiting for messages; disconnecting")
             return
 
         # If connection is abruptly terminated by peer
         except ConnectionError as e:
             self.logger.warning("%s", e)
-            self.logger.warning("Generic socket connection error; disconnecting")
-            self.send_to_master(utils.M_DISCONNECTED(self.address))
+            self.shutdown(reason="Generic socket error")
             return
 
 
             
-    def shutdown(self):
-        self.logger.info("Shutdown after receiving empty message from peer")
-        self.send_to_master(utils.M_DISCONNECTED(self.address))
+    def shutdown(self, reason:Union[str, None] = None):
+        self.logger.warning("Shutdown down for reason: %s", reason)
+        self.send_to_master(utils.M_DISCONNECTED(self.address, reason))
         exit(0)
 
     
@@ -241,31 +244,54 @@ class PeerManager:
         # sempre fare.
         self.am_choking = False
         self.send_message(MexType.UNCHOKE)
+
+            
+    def read_data(self, piece_index, piece_offset=0, piece_length=0) -> bytes:
+        """
+        Reads data at a given offset from the cache. Used when peer
+        asks me for a piece.
+
+        If piece is not in cache, raise an exception (it should never happen! 
+        every time you call read_data, data must be entered in cache!)
+        """
+        if piece_length == 0:
+            piece_length = self.get_piece_size(piece_index)
+
+        if piece_index not in self.cache_pieces:
+            breakpoint()
+            raise Exception(f"Don't have piece {piece_index} in cache!")
+
+        piece = self.cache_pieces[piece_index]
+        return piece[piece_offset:piece_offset+piece_length]
+
     
     #######
 
     def message_interpreter(self):
-        """ Elabora un messaggio ricevuto, decidendo come rispondere e/o
-        che cosa fare. """
+        """ 
+        Dispatches any kind of received message (either from Master or peer)
+        to the correct handler function.
+        """
 
         while True:
             mex = self.queue_in.get()
 
-            # Messagi di controllo (ie. da Master) vengono intoltrati a questa funzione
             if isinstance(mex, utils.MasterMex):
-                # catch early a KILL message
+                
+                # catch early a KILL message from MASTER
                 if isinstance(mex, utils.M_KILL):
                     self.logger.debug("[MASTER] Received KILL")
                     self.send_to_master(utils.M_DEBUG("Got KILLED", self.address))
                     return
-                
+
+                # If otherwise is any other MASTER mex, dispatch to this function
                 self.control_message_interpreter(mex)
                 continue
 
-            # TODO: messaggio vuoto b"" = fine scambio o errore di rete
+            
+            # Empty message from peer == peer has disconnected
             if mex == b"":
-                self.logger.info("Starting PeerManager shutdown...")
-                self.shutdown()
+                self.shutdown(reason="Received empty message from peer!")
                 break
             
             try:
@@ -317,18 +343,20 @@ class PeerManager:
                 self.manage_received_piece(piece_index, piece_offset, piece_payload)
 
             elif mex_type == MexType.CANCEL:
-                print("CANCEL not implemented")
+                self.logger.error("CANCEL not implemented")
 
             elif mex_type == MexType.PORT:
-                print("PORT not implemented")
+                self.logger.error("PORT message not implemented")
 
             else:
-                print("ricevuto messaggio sconosciuto")
+                self.logger.error("Received unknown message")
                 breakpoint()
 
             
     def control_message_interpreter(self, mex: utils.MasterMex):
-        self.logger.debug("[MASTER] Received message %s", str(type(mex)))
+        """
+        Reacts to any kind of message received from Master.
+        """
             
         if isinstance(mex, utils.M_DEBUG):
             self.logger.debug("[MASTER] Received DEBUG message from master: %s", mex.data)
@@ -384,6 +412,7 @@ class PeerManager:
             )
 
         elif isinstance(mex, utils.M_COMPLETED):
+            self.logger.info("Received COMPLETED message from Master")
             return
 
         else:
@@ -393,9 +422,12 @@ class PeerManager:
         
     def send_message(self, mexType: MexType, **kwargs):
         """
-        Sends (via socket) a message to the peer.
+        Sends (via socket) a message to the peer. 
+
+        The **kwargs are for custom parameters of the 
+        message (eg. `piece_index` for a PIECE message, and so on).
         """
-        if "delay" in self.options:
+        if "delay" in self.options: # only for debug
             time.sleep(self.options["delay"])
         self.socket.sendall(self.make_message(mexType, **kwargs))
 
@@ -469,28 +501,21 @@ class PeerManager:
             num_pieces=self.metainfo.num_pieces
         )
 
+        # Pretty print bitmaps
         if len(self.my_bitmap) < 80:
-            # Pretty view of my/peer bitmaps
-            # TODO: rendilo funzione a se stante
-            print("my:   |", end="")
-            for my in self.my_bitmap:
-                print("x" if my else " ", end="")
-            print("\npeer: |", end="")
-            for peer in self.peer_bitmap:
-                print("x" if peer else " ", end="")
-            print()
+            utils.pprint_bitmap(self.my_bitmap, "self")
+            utils.pprint_bitmap(self.peer_bitmap, "peer")
 
         # Sanity check
         assert len(self.my_bitmap) == len(self.peer_bitmap)
 
-        
-        # Idenitifico (if any) i pieces del mio peer che io non ho
+        # Identify (if any) pieces that my peer has but I have not.
         for i, (m,p) in enumerate(zip(self.my_bitmap, self.peer_bitmap)):
             if not m and p:
                 self.am_interested_in.append(i)
 
-        self.logger.debug("[MASTER] Sending M_PEER_HAS to master")
         # Informs master of peer's bitmap
+        self.logger.debug("[MASTER] Sending M_PEER_HAS to master")
         self.send_to_master(
             utils.M_PEER_HAS(
                 self.am_interested_in,
@@ -499,9 +524,8 @@ class PeerManager:
             )
         )
         
-        # Se, dal confronto fra la mia e l'altrui bitmap, scopro
-        # che non mi interessa nulla di ciò che ha il peer, informalo che
-        # sei NOT_INTERESTED
+        # If, after confronting my and peer's bitmaps, it turns out that
+        # I don't want any pieces of my peer, send NOT INTERESTED
         if len(self.am_interested_in) == 0 or len(self.scheduled) == 0:
             self.logger.debug("Nothing to be interested in")
             if self.am_interested:
@@ -509,11 +533,12 @@ class PeerManager:
                 self.logger.debug("Sending NOT_INTERESTED")
                 self.send_message(MexType.NOT_INTERESTED)
             return
-        
-        if self.am_interested: # Se ero già interessato in precedenza, non fare nulla
+
+        # Se ero già interessato in precedenza, non fare nulla
+        if self.am_interested:
             return
 
-        # Altrimenti dichiara il tuo interesse
+        # Otherwise, declare you are INTERESTED
         self.am_interested = True
         self.logger.debug("Sending INTERESTED message")
         self.send_message(MexType.INTERESTED)
@@ -624,14 +649,19 @@ class PeerManager:
 
     
     def try_ask_for_piece(self, suggestion=None):
-        """ Differisce da ask_for_new_piece: mentre l'altro chiede un pezzo
-        mai scaricato prima, questo potrebbe anche riprendere il download
-        di un pezzo già iniziato. """
+        """ 
+        Requests for an already-started-but-not-completely-downloaded
+        piece.
+
+        If no half-downloaded piece exists, then asks for a completely
+        new piece (reverts to ask_for_new_pieces).
+        """
         if self.peer_chocking:
             self.logger.debug("Wanted to request a piece, but am choked")
             return
-        
-        if len(self.my_progresses) == 0: # se non ci sono pezzi incompleti
+
+        # If no incompleted piece, simply ask new pieces.
+        if len(self.my_progresses) == 0: 
             return self.ask_for_new_pieces()
 
         if len(self.my_progresses) > self.max_concurrent_pieces:
@@ -845,30 +875,36 @@ class PeerManager:
 # Ogni nuova connessione viene assegnata ad un oggetto TorrentPeer,
 # il quale si occuperà di gestire lo scambio di messaggi
 class ThreadedServer:
-    def __init__(self, metainfo, tracker_manager, **options):
+    def __init__(self, metainfo, tracker_manager, socket=None, **options):
         self.host, self.public_ip = "localhost", utils.get_external_ip()
         self.peer = None
         self.options = options
 
-        self.logger = logging.getLogger("ThreadedServer")
-        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
-        self.logger.debug("__init__")
-        
         self.metainfo = metainfo
         self.tracker_manager = tracker_manager
 
-        port = options["port"]
-        self.logger.info("Server is binding at %s", (self.host, port))
+        self.logger = logging.getLogger("[{}] ThreadedServer".format(self.metainfo.human_name))
+        self.logger.setLevel(options.get("debug_level", logging.DEBUG))
+        self.logger.debug("__init__")
+
         
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # self.sock.bind(("192.168.1.116", port))
-        self.sock.bind((self.host, port))
+        if socket is None:
+            port = options["port"]
+            self.logger.info("Server is binding at %s", (self.host, port))
 
-        self.port = self.sock.getsockname()[1]
-        if port == 0:
-            self.logger.info("Self port: %d", self.port)
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # self.sock.bind(("192.168.1.116", port))
+            self.sock.bind((self.host, port))
 
+            self.port = self.sock.getsockname()[1]
+            if port == 0:
+                self.logger.info("Self port: %d", self.port)
+        else:
+            self.sock = socket
+            self.port = self.sock.getsockname()[1]
+            self.logger.info("Received socket for %s", self.sock.getsockname())
+            
         self.peers = self.options.get("suggested_peers", [])
         peers = self.tracker_manager.notify_start()
         for ip, pport in peers: #filters myself
@@ -983,7 +1019,7 @@ class ThreadedServer:
         while True:
             self.logger.debug("Waiting for connections...")
             client_socket, address = self.sock.accept()
-            self.logger.debug("Received connection request from: %s", address)
+            self.logger.info("Received connection request from: %s", address)
             
             new_peer = PeerManager(
                 (client_socket, address),
@@ -1098,6 +1134,7 @@ def parser(s=None):
     print(options)
     
     return options
+
 
 
 if __name__ == "__main__":
