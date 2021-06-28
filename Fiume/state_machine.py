@@ -5,6 +5,7 @@ import logging
 import enum
 import random
 import pathlib 
+import sys
 
 from queue import Queue
 from typing.io import *
@@ -227,7 +228,7 @@ class PeerManager:
     def shutdown(self, reason:Union[str, None] = None):
         self.logger.warning("Shutdown down for reason: %s", reason)
         self.send_to_master(utils.M_DISCONNECTED(self.address, reason))
-        exit(0)
+        sys.exit(0)
 
     
     def try_unchoke_peer(self):
@@ -363,12 +364,12 @@ class PeerManager:
             self.send_to_master(utils.M_DEBUG("Got DEBUGGED", self.address))
             return
         
-        elif isinstance(mex, utils.M_OUR_BITMAP):
+        if isinstance(mex, utils.M_OUR_BITMAP):
             self.logger.debug("[MASTER] Received OUR_BITMAP message from master")
             self.my_bitmap = mex.bitmap
             return
             
-        elif isinstance(mex, utils.M_SCHEDULE):
+        if isinstance(mex, utils.M_SCHEDULE):
             self.logger.debug("[MASTER] Received SCHEDULE message from master: %s", mex.pieces_index)
             self.scheduled += mex.pieces_index
             # Avoids deadlock:
@@ -380,7 +381,7 @@ class PeerManager:
             return
 
         
-        elif isinstance(mex, utils.M_NEW_HAVE):
+        if isinstance(mex, utils.M_NEW_HAVE):
             self.logger.debug("[MASTER] Received NEW_HAVE message from master: %s", mex.piece_index)
             self.my_bitmap[mex.piece_index] = True
             self.send_message(MexType.HAVE, piece_index=mex.piece_index)
@@ -391,7 +392,7 @@ class PeerManager:
         # master, on behalf of the peer, a piece N.
         # We put the entire piece N in a cache.
         # Then we resume the deferred request, 
-        elif isinstance(mex, utils.M_PIECE):
+        if isinstance(mex, utils.M_PIECE):
             self.logger.debug("Received piece %d from master", mex.piece_index)
             
             self.cache_pieces[mex.piece_index] = mex.data
@@ -411,13 +412,12 @@ class PeerManager:
                 deferred=True #important!
             )
 
-        elif isinstance(mex, utils.M_COMPLETED):
+        if isinstance(mex, utils.M_COMPLETED):
             self.logger.info("Received COMPLETED message from Master")
             return
 
-        else:
-            breakpoint()
-            raise Exception("unknown message")
+        breakpoint()
+        raise Exception("unknown message")
         
         
     def send_message(self, mexType: MexType, **kwargs):
@@ -912,7 +912,8 @@ class ThreadedServer:
                 if self.port == pport:
                     continue
             self.peers.append((ip, pport))
-        
+        self.peers = set(self.peers)
+
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
         # creata ad hoc.
@@ -945,7 +946,7 @@ class ThreadedServer:
         self.mcu.main()
         
         self.logger.debug("Available peers: %s", self.peers)
-        if self.peers == []:
+        if self.peers == set():
             self.logger.info("No peers currently available")
             return
         
@@ -954,25 +955,35 @@ class ThreadedServer:
             # or we have completed
             while not self.ts_queue_in.empty():
                 mex = self.ts_queue_in.get()
+                
                 if isinstance(mex, utils.M_DISCONNECTED):
                     self.logger.info("Disconnected peer %s", mex.sender)
                     self.active_connections.remove(mex.sender)
+                    
                 elif isinstance(mex, utils.M_COMPLETED):
                     self.logger.info("Completed download!")
                     self.is_completed = True
+                    
+                elif isinstance(mex, utils.M_KILL): #coming from fiume/cli
+                    self.logger.info("Received KILL message, closing.")
+                    sys.exit(0)
 
+
+                        
             # If completed dowload, this loop ends; the thread listening
             # for new connections however will remain alive
             if self.is_completed:
                 break
+
+            print(self.peers)
             
             # If reached max number of connected peers
-            if len(self.active_connections) > min(self.max_peer_connections, len(self.peers)):
+            if len(self.active_connections) >= min(self.max_peer_connections, len(self.peers)):
                 self.logger.debug("Max peer connections, sleeping 5sec")
                 time.sleep(5)
                 continue
             
-            ip, port = random.choice(self.peers)
+            ip, port = random.choice(list(self.peers))
             
             if (ip, port) in self.active_connections:
                 self.logger.warning("Attemping to connect to an already connected peer, %s; abort", (ip, port))

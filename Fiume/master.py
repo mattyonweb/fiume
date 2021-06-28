@@ -230,7 +230,7 @@ class MasterControlUnit:
         while True:
             mex = self.queue_in.get()
 
-            assert isinstance(mex, MasterMex)
+            assert isinstance(mex, MasterMex), mex
 
             # When we are informed that a peer 
             if isinstance(mex, M_PEER_HAS):
@@ -296,6 +296,8 @@ class MasterControlUnit:
                 
             elif isinstance(mex, M_KILL):
                 # Only debug, or user input
+                self.send_all(M_KILL())
+                self.queue_connection_manager.put(M_KILL())
                 break
 
 
