@@ -11,7 +11,7 @@ import Fiume.config as config
 
 from Fiume.utils import *
 from watchdog.observers import Observer
-from watchdog.events import *
+from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 from typing import *
 
 
@@ -55,10 +55,11 @@ class Fiume:
             j = json.loads(f.read())
 
         for item in j:
-            self.add_torrent(
-                Path(item["torrent_path"]),
-                Path(item["output_file"])
-            )
+            threading.Thread(
+                target = self.add_torrent,
+                args = ( Path(item["torrent_path"]),
+                         Path(item["output_file"]))
+            ).start()
 
             
     def add_torrent(self, torrent_path: Path, output_file: Path):

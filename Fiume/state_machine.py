@@ -953,8 +953,9 @@ class ThreadedServer:
         )
         self.master_queue = self.mcu.get_master_queue()
 
-        self.ttl_peer_table = ttl.TTL_table()
-    
+        self.ttl_peer_table = ttl.TTL_table(self.timeout)
+
+        
     def main(self):       
         socket_listen_t = threading.Thread(target=self.listen)
         socket_listen_t.daemon = True
@@ -969,7 +970,6 @@ class ThreadedServer:
 
         # Connects to every peer who allows me to connect
         if not self.is_completed:
-            print("AOOOOOOOOOOOOOOOOOOOOOOOOO")
             for ip, port in self.peers:
                 queues = Queue(), self.master_queue
                 self.connect_as_client(ip, port, queues)
@@ -985,14 +985,14 @@ class ThreadedServer:
                     self.logger.info("Disconnected peer %s", mex.sender)
                     self.active_connections.remove(mex.sender)
 
-                    self.logger.debug("Inserting %s in ttl table with ttl=%d",
-                                      mex.sender, 2 * self.timeout)
-                    self.ttl_peer_table.add(mex.sender, 2 * self.timeout) # TODO timeout
-
+                    new_ttl = self.ttl_peer_table.add(mex.sender) # TODO timeout
+                    self.logger.info("Inserting %s in ttl table with ttl=%d",
+                                      mex.sender, new_ttl)
+                    
                     # try to connect to any known peer, which did not
                     # recently disconnected from us
                     if self.ttl_peer_table.any_ready():
-                        (new_ip, new_port) = self.ttl_peer_table.extract(n=1)
+                        [(new_ip, new_port)] = self.ttl_peer_table.extract(n=1)
                         self.connect_as_client(
                             new_ip, new_port,
                             (Queue(), self.master_queue)
@@ -1016,8 +1016,8 @@ class ThreadedServer:
 
             if len(self.active_connections) == 0:                
                 if self.ttl_peer_table.any_ready():
-                    (new_ip, new_port) = self.ttl_peer_table.extract(n=1)
-                    self.logger.debug("Found a peer to wake %s", (new_ip, new_port))
+                    [(new_ip, new_port)] = self.ttl_peer_table.extract(n=1)
+                    self.logger.info("Found a peer to wake %s", (new_ip, new_port))
                                         
                     self.connect_as_client(
                         new_ip, new_port,
@@ -1027,7 +1027,8 @@ class ThreadedServer:
                 else:
                     self.logger.debug("No active connections while download is incomplete; 5 second sleep")
                     time.sleep(5)
-                    
+            else:
+                time.sleep(1)
                     
         self.logger.info("Completed download, now in seed-listening phase") 
 
@@ -1050,20 +1051,20 @@ class ThreadedServer:
             
         except socket.timeout:
             self.logger.debug("Cannot connect to %s after %d seconds, abort", (ip, port), self.timeout)
-            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), self.timeout*2)
-            self.ttl_peer_table.add((ip, port), self.timeout*2)
+            new_ttl = self.ttl_peer_table.add((ip, port))
+            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), new_ttl)
             return
         
         except ConnectionRefusedError as e:
             self.logger.debug("%s: %s", (ip, port), e)
-            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), self.timeout*2)
-            self.ttl_peer_table.add((ip, port), self.timeout*2)
+            new_ttl = self.ttl_peer_table.add((ip, port))
+            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), new_ttl)
             return
         
         except Exception as e:
             self.logger.error("%s: %s", (ip, port), e)
-            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), self.timeout*2)
-            self.ttl_peer_table.add((ip, port), self.timeout*2)
+            new_ttl = self.ttl_peer_table.add((ip, port))
+            self.logger.debug("Hybernating %s with TTL=%d", (ip, port), new_ttl)
             raise e
 
         t = threading.Thread(target = new_peer.main)
@@ -1104,17 +1105,6 @@ class ThreadedServer:
             t.daemon = True
             t.start()
 
-    def check_suspension(self):
-        while True:
-            if self.terminator.is_set():
-                break
-            time.sleep(1)
-        self.shutdown_all()
-        
-    def shutdown_all(self):
-        self.logger.warning("SHUTTING DOWN ALL, CAREFULLY")
-        self.tracker_manager.notify_stop()
-        sys.exit(0)
 
 ###############################
 
