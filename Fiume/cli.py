@@ -32,6 +32,60 @@ def main_multiple():
 
     app = fm.Fiume(options)
     app.begin_session()
+
     
-# if __name__ == "__main__":
-#     main()
+def add_torrent():
+    import argparse
+    import pathlib
+    import json
+    import Fiume.config as config
+    
+    parser = argparse.ArgumentParser(
+        description="Adds a torrent to Fiume dowloading.json.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    parser.add_argument("torrent_path",
+                        action="store",
+                        # dest="torrent_path",
+                        # type=pathlib.Path,
+                        type=str,
+                        help="path to .torrent file")
+
+    parser.add_argument("output_path",
+                        action="store",
+                        # dest="output_path",
+                        # type=pathlib.Path,
+                        type=str,
+                        help="where to put downloaded files")
+
+    parser.add_argument("-f",
+                        type=pathlib.Path,
+                        default=config.IN_DOWNLOAD_FILE,
+                        action="store",
+                        dest="downloading_json",
+                        help="path to custom downloading.json file")
+
+    options = vars(parser.parse_args())
+
+    with open(options["downloading_json"], "r") as f:
+        js = json.load(f)
+
+    torrent_path = options["torrent_path"]
+    output_path  = options["output_path"]
+
+    # If the new torrent I'm adding is already in the json,
+    # remove it from the json and replace it
+    already_there = list()
+    for i, d in enumerate(js):
+        if torrent_path in d.keys():
+            already_there.append(i)
+    for i in already_there[::-1]:
+        del js[i]
+
+    js.append({torrent_path : output_path})
+
+    with open(options["downloading_json"], "w") as f:
+        f.write(json.dumps(js))
+
+    

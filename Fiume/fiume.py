@@ -31,8 +31,11 @@ class Fiume:
     
     def __init__(self, options):
         # Questo file contiene info in JSON su file in scaricamento
-        self.downloading_file = config.IN_DOWNLOAD_FILE
         self.options = options
+        self.downloading_file = self.options.get(
+            "downloading_json",
+            config.IN_DOWNLOAD_FILE
+        )
         self.open_connections: Dict[Path, Dict] = dict()
 
         self.port = self.options["port"]

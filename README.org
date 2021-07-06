@@ -1,0 +1,44 @@
+* Fiume
+
+[[https://badge.fury.io/py/Fiume.svg]]
+
+  
+#+caption: logo
+[[file:docs/logo-small.png]]
+
+A toy BitTorrent client written in python, based on the official
+[[https://www.bittorrent.org/beps/bep_0003.html][specs]].
+
+
+** Installation and usage
+Install it from [[https://pypi.org/project/Fiume/][pip]]:
+
+#+begin_example
+  pip install Fiume
+#+end_example
+
+This will install a ~fiume~ app, accessible from command line. 
+
+To add/remove ~.torrents~ files,  
+
+Launch it with ~fiume~ from command line:
+
+#+INCLUDE: "docs/help-message" example
+
+** Functionalities
+
+*** What it can do
+
+- Download of single-file torrents from multiple peers!
+- Manage more than one .torrent at a time
+- Save download state beetwen sessions, and start again at a later time
+- Reach acceptable speed downloads (achives maximum download speed on my
+  home connections, ie. 6MBytes/s)
+- Offer a basic CLI
+
+*** What it can NOT do
+
+- Download of multiple-file torrents
+- Support DHT, Message Stream Encryption or any other extension
+- While download functionalities has been tested, uploading
+  functionalities are still under test (correctly)

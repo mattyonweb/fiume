@@ -14,3 +14,5 @@ if not BITMAPS_DIR.exists():
 IN_DOWNLOAD_FILE = DOT_DIRECTORY / "downloading.json"
 if not IN_DOWNLOAD_FILE.exists():
     IN_DOWNLOAD_FILE.touch()
+    with open(IN_DOWNLOAD_FILE, "w") as f:
+        f.write("[ \n \n ]")

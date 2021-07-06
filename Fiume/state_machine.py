@@ -1126,16 +1126,17 @@ import argparse
 
 def parser(s=None):
     parser = argparse.ArgumentParser(
-        description="A Bittorrent client for single-file torrent."
+        description="A Bittorrent client for single-file torrent.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument("torrent_path",
+    parser.add_argument("-f",
                         type=pathlib.Path,
-                        help="path to .torrent file")
-
-    parser.add_argument("output_file",
-                        type=pathlib.Path,
-                        help="where to download the file")
+                        default=config.IN_DOWNLOAD_FILE,
+                        action="store",
+                        dest="downloading_json",
+                        help="path to downloading.json file, containing currently downloading files"
+                        )
 
     parser.add_argument("-p", "--port",
                         action="store",
@@ -1143,37 +1144,32 @@ def parser(s=None):
                         default=50146,
                         help="port for this client")
 
-    parser.add_argument("-v", "--verbosity",
+    parser.add_argument("-v", "--verbose",
                         action="count",
                         default=0,
                         dest="debug_level",
-                        help="debug level")
-    
-    parser.add_argument("-t", "--timeout",
-                        action="store",
-                        default=10,
-                        type=int,
-                        help="max num of concurrent connections")
+                        help="increases verbosity of output")
     
     parser.add_argument("--max-peer-connections",
                         action="store",
                         default=2,
                         type=int,
                         dest="max_peer_connections",
-                        help="max num of concurrent connections")
+                        help="max num of concurrent inbound connections")
 
     parser.add_argument("--max-concurrent-pieces",
                         action="store",
-                        default=4,
+                        default=5,
                         type=int,
                         dest="max_concurrent_pieces",
                         help="max num of concurrent pieces downloaded from/to peer")
-
-    # parser.add_argument("--suggested_peers",
-    #                     action="store",
-    #                     default=[],
-    #                     help="suggested_peers")
-
+    
+    parser.add_argument("-t", "--timeout",
+                        action="store",
+                        default=10,
+                        type=int,
+                        help="timeout for various components of the program (only debug)")
+    
     parser.add_argument("--delay",
                         type=float,
                         default=0,
@@ -1193,33 +1189,3 @@ def parser(s=None):
     print(options)
     
     return options
-
-
-
-if __name__ == "__main__":
-    options = {
-        "torrent_path": pathlib.Path("/home/groucho/The Fanimatrix Run Program Full Release.torrent"),
-        "output_file":  pathlib.Path("/home/groucho/torrent/downloads/video"),
-        "delay": 0,
-        "debug": False,
-        "debug_level": logging.DEBUG,
-        "port": 50146,
-        "suggested_peers": [],
-        "max_peer_connections": 2,
-        "max_concurrent_pieces": 4,
-        "timeout": 15,
-    }
-
-    with open(options["torrent_path"], "rb") as f:
-        metainfo = md.MetaInfo(
-            bencodepy.decode(f.read()) | options
-        )
-
-    tm = md.TrackerManager(metainfo, options)
-
-    t = ThreadedServer(
-        metainfo, tm,
-        **options
-    )
-
-    t.main()
