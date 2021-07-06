@@ -293,6 +293,7 @@ def is_unwanted_addr(addr: Tuple, self_addr: Tuple):
     self_ip, self_port = self_addr
     return ["localhost", self_ip] and self_port == port
 
+
 # Repeats something every N seconds
 # https://stackoverflow.com/a/13151299
 from threading import Timer
