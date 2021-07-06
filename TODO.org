@@ -7,21 +7,29 @@
 #+LATEX_HEADER: \input{$HOME/.emacs.d/latex-preamble.tex}
 
 * Urgent
-** Implements multiple torrents download
+** DONE Implements multiple torrents download
+
+** TODO Re-adjust CLI
 
 ** Deal with scenario: peer does not send BITFIELD
-** Poll every 900sec each tracker for new peers
+
+** DONE Poll every 900sec each tracker for new peers
+
 ** Better re-distribuition algorithm
 
 * Not-so-urgent
-** In ThreadServer, retry every XXXsec to connect to a previously unreachable or disconnected peer
+** DONE In ThreadServer, retry every XXXsec to connect to a previously unreachable or disconnected peer
+Done by implementing a TTL table with exponential backoff. (see: [[ttl][ttl]])
 
 ** Implement rarest-first download strategy
 
 ** Magnet Links
 
 ** Table with TTL for peers
-Avoid immediate reconnection attempts after a disconnection/failed connection. 
+<<ttl>>
+Avoid immediate reconnection attempts after a disconnection/failed connection.
+
+
 ** Implements DHT
 
 ** Implement Fast Extension BEP 6

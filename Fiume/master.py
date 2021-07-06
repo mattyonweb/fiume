@@ -63,7 +63,7 @@ class MasterControlUnit:
         self.lock_download_file = threading.Lock()
 
         
-    def get_master_queue(self) -> Queue():
+    def get_master_queue(self) -> Queue:
         """
         Returns the queue with which communicate with master.
         """

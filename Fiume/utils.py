@@ -270,7 +270,7 @@ def already_completed_download(download_fpath: Path):
         return all([bool(x) for x in f.read().strip()])
     
 
-def get_external_ip():
+def get_external_ip() -> str:
     import requests
 
     return requests.get("https://api.ipify.org").text
@@ -286,3 +286,38 @@ def pprint_bitmap(bitmap: List[bool], who="my"):
     for my in bitmap:
         print("+" if my else " ", end="")
     print()
+
+    
+def is_unwanted_addr(addr: Tuple, self_addr: Tuple):
+    ip, port = addr
+    self_ip, self_port = self_addr
+    return ["localhost", self_ip] and self_port == port
+
+# Repeats something every N seconds
+# https://stackoverflow.com/a/13151299
+from threading import Timer
+class RepeatedTimer(object):
+    def __init__(self, function, interval, *args, **kwargs):
+        self._timer     = None
+        self.interval   = interval
+        self.function   = function
+        self.args       = args
+        self.kwargs     = kwargs
+        self.is_running = False
+        print("ARGS: ", args)
+        self.start()
+
+    def _run(self):
+        self.is_running = False
+        self.start()
+        self.function(*self.args, **self.kwargs)
+
+    def start(self):
+        if not self.is_running:
+            self._timer = Timer(self.interval, self._run)
+            self._timer.start()
+            self.is_running = True
+
+    def stop(self):
+        self._timer.cancel()
+        self.is_running = False

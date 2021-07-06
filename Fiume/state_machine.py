@@ -911,7 +911,6 @@ class ThreadedServer:
 
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            # self.sock.bind(("192.168.1.116", port))
             self.sock.bind((self.host, port))
 
             self.port = self.sock.getsockname()[1]
@@ -922,14 +921,8 @@ class ThreadedServer:
             self.port = self.sock.getsockname()[1]
             self.logger.info("Received socket for %s", self.sock.getsockname())
             
-        self.peers = self.options.get("suggested_peers", [])
-        peers = self.tracker_manager.notify_start()
-        for ip, pport in peers: #filters myself
-            if ip in ["localhost", self.public_ip]:
-                if self.port == pport:
-                    continue
-            self.peers.append((ip, pport))
-        self.peers = set(self.peers)
+        # self.peers = self.options.get("suggested_peers", [])
+        self.peers, self.peers_queue_in = self.tracker_manager.notify_start()        
 
         # La bitmap iniziale, quando il programma viene avviato.
         # Viene letta da un file salvato in sessioni precedenti, oppure
@@ -959,14 +952,13 @@ class ThreadedServer:
     def main(self):       
         socket_listen_t = threading.Thread(target=self.listen)
         socket_listen_t.daemon = True
-        socket_listen_t.start()        
-
+        socket_listen_t.start()
+        
         self.mcu.main()
         
         self.logger.debug("Available peers: %s", self.peers)
         if self.peers == set():
             self.logger.info("No peers currently available")
-            return
 
         # Connects to every peer who allows me to connect
         if not self.is_completed:
@@ -1014,19 +1006,37 @@ class ThreadedServer:
                 self.tracker_manager.notify_completion()
                 break
 
-            if len(self.active_connections) == 0:                
+
+            if not self.peers_queue_in.empty():
+                while not self.peers_queue_in.empty():
+                    (new_ip, new_port) = self.peers_queue_in.get()
+                    self.logger.info("Received new peer from trackers, %s", (new_ip, new_port))
+                    self.connect_as_client(
+                        new_ip, new_port,
+                        (Queue(), self.master_queue)
+                    )
+                time.sleep(2)
+                continue
+
+                
+            if len(self.active_connections) == 0:
+                
                 if self.ttl_peer_table.any_ready():
                     [(new_ip, new_port)] = self.ttl_peer_table.extract(n=1)
-                    self.logger.info("Found a peer to wake %s", (new_ip, new_port))
-                                        
+                    self.logger.info("Found a peer to wake in TTL, %s", (new_ip, new_port))
                     self.connect_as_client(
                         new_ip, new_port,
                         (Queue(), self.master_queue)
                     )
                     time.sleep(1)
+                    continue
+                
+                        
                 else:
                     self.logger.debug("No active connections while download is incomplete; 5 second sleep")
                     time.sleep(5)
+                    continue
+                    
             else:
                 time.sleep(1)
                     
@@ -1036,6 +1046,10 @@ class ThreadedServer:
         
             
     def connect_as_client(self, ip, port, queues: Tuple[Queue, Queue]):
+        if (ip, port) in self.active_connections:
+            self.logger.warning("%s:%s already in active_connections, bypass", ip, port)
+            return
+        
         try:
             new_socket = socket.create_connection((ip, port), timeout=self.timeout)
             new_socket.settimeout(self.timeout)
@@ -1074,8 +1088,6 @@ class ThreadedServer:
         self.active_connections.add((ip, port))
         self.mcu.add_connection_to(new_peer)
 
-        # return newPeer
-
     
     def listen(self):
         self.logger.info("Started listening on %s", (self.host, self.port))
@@ -1104,7 +1116,7 @@ class ThreadedServer:
             t = threading.Thread(target = new_peer.main)
             t.daemon = True
             t.start()
-
+            
 
 ###############################
 
@@ -1157,10 +1169,10 @@ def parser(s=None):
                         dest="max_concurrent_pieces",
                         help="max num of concurrent pieces downloaded from/to peer")
 
-    parser.add_argument("--suggested_peers",
-                        action="store",
-                        default=[],
-                        help="suggested_peers")
+    # parser.add_argument("--suggested_peers",
+    #                     action="store",
+    #                     default=[],
+    #                     help="suggested_peers")
 
     parser.add_argument("--delay",
                         type=float,
