@@ -99,7 +99,7 @@ class Fiume:
             except Exception as e:
                 print("ERROR: could not parse JSON file")
                 print(e)
-                return
+                raise e
             
         not_removed = set()
         for item in j:

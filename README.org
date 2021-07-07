@@ -17,13 +17,19 @@ Install it from [[https://pypi.org/project/Fiume/][pip]]:
   pip install Fiume
 #+end_example
 
-This will install a ~fiume~ app, accessible from command line. 
-
-To add/remove ~.torrents~ files,  
-
-Launch it with ~fiume~ from command line:
+This will install ~fiume~, the actual torrent client, accessible from command line as follows:
 
 #+INCLUDE: "docs/help-message" example
+
+To add/remove ~.torrents~ files to download, use the ~fiume-add~ interface:
+
+#+INCLUDE: "docs/help-message-add" example
+
+*** Configuration directories/files
+
+When installed, ~fiume~ creates a ~.fiume~ directory in your home. 
+
+It will contains a file, ~downloading.json~, which stores the torrent currently in download. You can modify this file freely and in any moment with your own tools, but if you want no trouble ~fiume~ provides a CLI command ~fiume-add~ to safely add new torrents. 
 
 ** Functionalities
 

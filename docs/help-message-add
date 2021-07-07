@@ -1,0 +1,12 @@
+usage: fiume-add [-h] [-f DOWNLOADING_JSON] torrent_path output_path
+
+Adds a torrent to Fiume dowloading.json.
+
+positional arguments:
+  torrent_path         path to .torrent file
+  output_path          where to put downloaded files
+
+optional arguments:
+  -h, --help           show this help message and exit
+  -f DOWNLOADING_JSON  path to custom downloading.json file (default:
+                       ~/.fiume/downloading.json)

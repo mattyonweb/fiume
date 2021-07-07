@@ -15,13 +15,10 @@ Install it from [pip](https://pypi.org/project/Fiume/):
 pip install Fiume
 ```
 
-This will install a `fiume` app, accessible from command line.
+This will install `fiume`, the actual torrent client, accessible from
+command line as follows:
 
-`.torrents` are to be
-
-Launch it with `fiume` from command line:
-
-    usage: fiume [-h] [-f F] [-p PORT] [-v]
+    usage: fiume [-h] [-f DOWNLOADING_JSON] [-p PORT] [-v]
                  [--max-peer-connections MAX_PEER_CONNECTIONS]
                  [--max-concurrent-pieces MAX_CONCURRENT_PIECES] [-t TIMEOUT]
                  [--delay DELAY]
@@ -30,8 +27,9 @@ Launch it with `fiume` from command line:
 
     optional arguments:
       -h, --help            show this help message and exit
-      -f F                  path to downloading.json file, containing currently
-                            downloading files (default: ~/.fiume/downloading.json)
+      -f DOWNLOADING_JSON   path to downloading.json file, containing currently
+                            downloading files (default:
+                            ~/.fiume/downloading.json)
       -p PORT, --port PORT  port for this client (default: 50146)
       -v, --verbose         increases verbosity of output (default: 0)
       --max-peer-connections MAX_PEER_CONNECTIONS
@@ -43,6 +41,31 @@ Launch it with `fiume` from command line:
                             timeout for various components of the program (only
                             debug) (default: 10)
       --delay DELAY         delay for every sent message (only debug) (default: 0)
+
+To add/remove `.torrents` files to download, use the `fiume-add`
+interface:
+
+    usage: fiume-add [-h] [-f DOWNLOADING_JSON] torrent_path output_path
+
+    Adds a torrent to Fiume dowloading.json.
+
+    positional arguments:
+      torrent_path         path to .torrent file
+      output_path          where to put downloaded files
+
+    optional arguments:
+      -h, --help           show this help message and exit
+      -f DOWNLOADING_JSON  path to custom downloading.json file (default:
+                           ~/.fiume/downloading.json)
+
+### Configuration directories/files
+
+When installed, `fiume` creates a `.fiume` directory in your home.
+
+It will contains a file, `downloading.json`, which stores the torrent
+currently in download. You can modify this file freely and in any moment
+with your own tools, but if you want no trouble `fiume` provides a CLI
+command `fiume-add` to safely add new torrents.
 
 ## Functionalities
 

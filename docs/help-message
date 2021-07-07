@@ -1,4 +1,4 @@
-usage: fiume [-h] [-f F] [-p PORT] [-v]
+usage: fiume [-h] [-f DOWNLOADING_JSON] [-p PORT] [-v]
              [--max-peer-connections MAX_PEER_CONNECTIONS]
              [--max-concurrent-pieces MAX_CONCURRENT_PIECES] [-t TIMEOUT]
              [--delay DELAY]
@@ -7,8 +7,9 @@ A Bittorrent client for single-file torrent.
 
 optional arguments:
   -h, --help            show this help message and exit
-  -f F                  path to downloading.json file, containing currently
-                        downloading files (default: ~/.fiume/downloading.json)
+  -f DOWNLOADING_JSON   path to downloading.json file, containing currently
+                        downloading files (default:
+                        ~/.fiume/downloading.json)
   -p PORT, --port PORT  port for this client (default: 50146)
   -v, --verbose         increases verbosity of output (default: 0)
   --max-peer-connections MAX_PEER_CONNECTIONS

@@ -55,9 +55,8 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "fiume-single=Fiume.cli:main_single",
-            "fiume=Fiume.cli:main_multiple",
-            "fiume-add=Fiume.cli:add_torrent"
+            "fiume=Fiume.main:main",
+            "fiume-add=Fiume.cli.add_torrent:add_torrent"
         ]
     },
     python_requires='>=3.9',
