@@ -101,19 +101,21 @@ class Fiume:
                 print(e)
                 raise e
             
-        not_removed = set()
+        temp = set()
         for item in j:
-            if Path(item["torrent_path"]) in self.open_connections:
-                not_removed.add(Path(item["torrent_path"]))
-                
-            else:
-                self.add_torrent(
-                    Path(item["torrent_path"]),
-                    Path(item["output_file"])
-                )
+            p = Path(item["torrent_path"])
 
-        for path in set(self.open_connections) - not_removed:
+            if p not in self.open_connections:
+                self.add_torrent(p, Path(item["output_file"]))
+
+            temp.add(p)
+
+        
+        for path in set(self.open_connections) - temp:
             self.remove_torrent(path)
+
+        new_open_connections = {k:v for k,v in self.open_connections.items() if k in temp}
+        self.open_connections = new_open_connections
 
         
             
@@ -126,13 +128,15 @@ class Fiume:
 
         event_handler = MyHandler()
         observer = Observer()
-        observer.schedule(event_handler, self.downloading_file, recursive=True)
+        # observer.schedule(event_handler, self.downloading_file, recursive=True)
+        observer.schedule(event_handler, self.downloading_file)
         observer.start()
 
         # observer.stop()
         # observer.join()
 
     def remove_torrent(self, torrent_path: Path):
+        print("REMOVING TORRENT", torrent_path)
         self.open_connections[torrent_path][1].put(M_KILL())
         del self.open_connections[torrent_path]
         
