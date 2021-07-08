@@ -10,26 +10,34 @@ A toy BitTorrent client written in python, based on the official
 [[https://www.bittorrent.org/beps/bep_0003.html][specs]].
 
 
-** Installation and usage
+** Installation
 Install it from [[https://pypi.org/project/Fiume/][pip]]:
 
 #+begin_example
   pip install Fiume
 #+end_example
 
-This will install ~fiume~, the actual torrent client, accessible from command line as follows:
-
-#+INCLUDE: "docs/help-message" example
-
-To add/remove ~.torrents~ files to download, use the ~fiume-add~ interface:
-
-#+INCLUDE: "docs/help-message-add" example
+This will install ~fiume~, the actual torrent client, as well as other utilities.
 
 *** Configuration directories/files
 
 When installed, ~fiume~ creates a ~.fiume~ directory in your home. 
 
-It will contains a file, ~downloading.json~, which stores the torrent currently in download. You can modify this file freely and in any moment with your own tools, but if you want no trouble ~fiume~ provides a CLI command ~fiume-add~ to safely add new torrents. 
+It will contain a file, ~downloading.json~, which stores the torrents currently in download. You can modify this file freely and in any moment with your own tools, but if you want no trouble ~fiume~ provides a CLI command ~fiume-add~ to safely add new torrents. 
+
+
+** ~fiume~ usage
+
+~fiume~ is the actual program. Its CLI is as follows:
+
+#+INCLUDE: "docs/help-message" example
+
+** ~fiume-add~ usage
+
+To add/remove ~.torrents~ files to download, use the ~fiume-add~ interface:
+
+#+INCLUDE: "docs/help-message-add" example
+
 
 ** Functionalities
 

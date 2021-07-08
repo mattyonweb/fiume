@@ -14,6 +14,7 @@ from typing import *
 import Fiume.utils as utils
 import Fiume.master as master
 import Fiume.ttl as ttl
+import Fiume.config as config
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -112,7 +113,6 @@ class PeerManager:
         self.deferred_peer_requests: Dict[int, Tuple[int, int]] = dict()
         
         self.max_concurrent_pieces = 4
-        self.timeout = self.options["timeout"]
     
         self.old_messages: List[Tuple[str, bytes]] = list()
         self.completed = False
@@ -208,6 +208,13 @@ class PeerManager:
                 raw_mex = bytes()
                 while length != 0:
                     data = self.socket.recv(length)
+
+                    # Otherwise, if a b"" happens while in this loop you have a terrible
+                    # infinite loop!
+                    if len(data) == 0:
+                        self.queue_in.put(b"")
+                        return
+                
                     raw_mex += data
                     length -= len(data)
                     if length < 0:
@@ -920,6 +927,7 @@ class ThreadedServer:
             self.sock = socket
             self.port = self.sock.getsockname()[1]
             self.logger.info("Received socket for %s", self.sock.getsockname())
+
             
         # self.peers = self.options.get("suggested_peers", [])
         self.peers, self.peers_queue_in = self.tracker_manager.notify_start()        
@@ -934,6 +942,8 @@ class ThreadedServer:
         )
 
         self.timeout = self.options["timeout"]
+        # self.sock.settimeout(self.timeout)
+
         self.max_peer_connections = self.options["max_peer_connections"]
         self.active_connections = set()
         self.is_completed = all(bool(int(x)) for x in self.initial_bitmap)
@@ -1051,7 +1061,7 @@ class ThreadedServer:
             return
         
         try:
-            new_socket = socket.create_connection((ip, port), timeout=self.timeout)
+            new_socket = socket.create_connection((ip, port))
             new_socket.settimeout(self.timeout)
             
             new_peer = PeerManager(
