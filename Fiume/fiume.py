@@ -64,7 +64,7 @@ class Fiume:
                          Path(item["output_file"]))
             ).start()
 
-            
+
     def add_torrent(self, torrent_path: Path, output_file: Path):
         """
         Fires up a ThreadedServer for a single .torrent file.
@@ -92,15 +92,22 @@ class Fiume:
         main_thread_peer.start()
 
         
-    def re_parse_downloading_file(self):
+    def re_parse_downloading_file(self, last_hash):
         with open(self.downloading_file, "r") as f:
             try:
-                j = json.loads(f.read())
+                file_contents = f.read()
+                j = json.loads(file_contents)
             except Exception as e:
                 print("ERROR: could not parse JSON file")
                 print(e)
                 raise e
-            
+
+            if sha1(bytes(file_contents, "utf-8")) == last_hash:
+                return None
+            else:
+                print("CHANGED downloading.json")
+                last_hash = sha1(bytes(file_contents, "utf-8"))
+                
         temp = set()
         for item in j:
             p = Path(item["torrent_path"])
@@ -117,14 +124,25 @@ class Fiume:
         new_open_connections = {k:v for k,v in self.open_connections.items() if k in temp}
         self.open_connections = new_open_connections
 
+        return last_hash
         
             
     def monitor_downloading_file(self):
         class MyHandler(FileSystemEventHandler):
+            def __init__(self, *args, **kwargs):
+                self.last_hash = None
+                super().__init__(*args, **kwargs)
+                
             def on_modified(cls, event):
+                # bug in library watchdog: multiple events are fired, even if
+                # only one event happened. Workaround involving hashes
                 if isinstance(event, FileModifiedEvent):
-                    print("FILE DOWNLADING.json MODIFICATO")
-                    self.re_parse_downloading_file()
+                    new_hash = self.re_parse_downloading_file(cls.last_hash)
+
+                    if new_hash is None:
+                        return
+                    
+                    cls.last_hash = new_hash
 
         event_handler = MyHandler()
         observer = Observer()
