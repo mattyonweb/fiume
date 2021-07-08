@@ -15,17 +15,13 @@ Install it from [pip](https://pypi.org/project/Fiume/):
 pip install Fiume
 ```
 
-This will install `fiume`, the actual torrent client, as well as other
-utilities.
+This will install `fiume`, the actual torrent client, as well as other utilities.
 
 ### Configuration directories/files
 
 When installed, `fiume` creates a `.fiume` directory in your home.
 
-It will contain a file, `downloading.json`, which stores the torrents
-currently in download. You can modify this file freely and in any moment
-with your own tools, but if you want no trouble `fiume` provides a CLI
-command `fiume-add` to safely add new torrents.
+It will contain a file, `downloading.json`, which stores the torrents currently in download. You can modify this file freely and in any moment with your own tools, but if you want no trouble `fiume` provides a CLI command `fiume-add` to safely add new torrents.
 
 ## `fiume` usage
 
@@ -57,8 +53,7 @@ command `fiume-add` to safely add new torrents.
 
 ## `fiume-add` usage
 
-To add/remove `.torrents` files to download, use the `fiume-add`
-interface:
+To add/remove `.torrents` files to download, use the `fiume-add` interface:
 
     usage: fiume-add [-h] [-f DOWNLOADING_JSON] torrent_path output_path
 
@@ -77,12 +72,11 @@ interface:
 
 ### What it can do
 
--   Download of single-file torrents from multiple peers!
--   Manage more than one .torrent at a time
--   Save download state beetwen sessions, and start again at a later
-    time
--   Reach acceptable speed downloads (achives maximum download speed on
-    my home connections, ie. 6MBytes/s)
+-   Download of single-file torrents!
+-   Can manage more than one .torrent download at a time
+-   Save download state beetwen sessions, and start again at a later time
+-   Reach acceptable speed downloads (achives maximum download speed on my
+    home connections, ie. 6MBytes/s)
 -   Offer a basic CLI
 
 ### What it can NOT do

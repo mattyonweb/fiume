@@ -12,6 +12,7 @@ import Fiume.config as config
 from Fiume.utils import *
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+
 from typing import *
 
 

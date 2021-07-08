@@ -43,8 +43,8 @@ To add/remove ~.torrents~ files to download, use the ~fiume-add~ interface:
 
 *** What it can do
 
-- Download of single-file torrents from multiple peers!
-- Manage more than one .torrent at a time
+- Download of single-file torrents!
+- Can manage more than one .torrent download at a time
 - Save download state beetwen sessions, and start again at a later time
 - Reach acceptable speed downloads (achives maximum download speed on my
   home connections, ie. 6MBytes/s)
